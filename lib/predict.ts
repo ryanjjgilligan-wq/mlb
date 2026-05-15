@@ -603,3 +603,238 @@ function clamp01(v: number): number {
   if (!Number.isFinite(v)) return 0;
   return Math.max(0, Math.min(1, v));
 }
+
+// ── First 5 Innings (F5) ─────────────────────────────────────────────────────
+
+/**
+ * Predict first-5-inning outcomes — the popular F5 segment.
+ *
+ * Why a separate model
+ * --------------------
+ *   In F5, the starting pitcher carries ~95% of the workload (avg starter
+ *   IP/start ≈ 5.3 in 2024-26). The bullpen barely matters, lineup turnover
+ *   is mostly first time through the order, and the starter's true talent
+ *   dominates run prevention. The full-game model blends starter and
+ *   bullpen — F5 should anchor on the starter.
+ *
+ * Core math
+ * ---------
+ *   For each side: expected_runs_F5 = inningsCovered × (offensive R/9 / 9)
+ *     where offensive R/9 = a Log5 blend of team RS/G with the opposing
+ *     starter's RA/9 proxy (FIP). The starter handles min(5, IP/start)
+ *     innings; any leftover ⌈x/9⌉ uses team RA/G.
+ *
+ *   Then × park, weather, umpire — same multiplicative modifiers as the
+ *   full-game model, only applied across F5 instead of 9 innings.
+ *
+ * Distribution & probabilities
+ * ----------------------------
+ *   Total F5 runs ~ Poisson(λ_F5_total) with overdispersion ψ=1.4
+ *   (F5 has slightly less overdispersion than full game). Normal approx
+ *   for CI and home win prob.
+ *
+ *   P(F5 over X.5) via Poisson tail.
+ *   P(NRFI — no runs in first inning) = P(0 runs given lambda_per_inning).
+ */
+
+const F5_OVERDISPERSION = 1.4;
+const F5_LEAGUE_AVG_RPG = 4.5;
+
+export type First5Input = RunTotalInput; // same input set; we just re-interpret horizon
+
+export type First5Output = {
+  expectedHomeRuns: number;
+  expectedAwayRuns: number;
+  expectedTotal: number;
+  modifiers: Component[];
+  ci80: { low: number; high: number };
+  ci95: { low: number; high: number };
+  pHomeWin: number;
+  pTotalOver: { line: number; prob: number }[]; // 2.5, 3.5, 4.5, 5.5
+  pNRFI: number; // No Runs in First Inning
+  // Per-starter projected F5 lines (through their inn share of 5)
+  starters: {
+    away: First5StarterLine | null;
+    home: First5StarterLine | null;
+  };
+  confidence: Confidence;
+  warnings: string[];
+};
+
+export type First5StarterLine = {
+  inningsCovered: number;
+  expectedK: number;
+  expectedBB: number;
+  expectedHits: number;
+  expectedHRs: number;
+  expectedRuns: number; // ER through F5 share
+};
+
+export function predictFirst5(input: First5Input): First5Output {
+  const modifiers: Component[] = [];
+  const warnings: string[] = [];
+
+  const homeOff = input.home.runsScoredPerGame || F5_LEAGUE_AVG_RPG;
+  const awayOff = input.away.runsScoredPerGame || F5_LEAGUE_AVG_RPG;
+  if (!input.home.runsScoredPerGame) warnings.push('Home offense run rate missing — using league average.');
+  if (!input.away.runsScoredPerGame) warnings.push('Away offense run rate missing — using league average.');
+
+  // Starter run-prevention proxy: FIP is on the ERA scale
+  const starterRA = (sp?: StarterInput): number | null => sp?.fip ?? null;
+
+  const homeStartRA = starterRA(input.homeStarter);
+  const awayStartRA = starterRA(input.awayStarter);
+
+  // Cover up to 5 innings with the starter, anything past that is bullpen (team RA/G as proxy)
+  const homeStartIP = Math.min(5, Math.max(2, input.homeStarter?.ipPerStart ?? 5));
+  const awayStartIP = Math.min(5, Math.max(2, input.awayStarter?.ipPerStart ?? 5));
+
+  function teamF5Runs(off: number, oppStartRA: number | null, oppStartIP: number, oppTeamRA: number): number {
+    // Per-inning rates
+    const offPerInn = off / 9;
+    const starterRAperInn = (oppStartRA ?? oppTeamRA) / 9;
+    const teamRAperInn = oppTeamRA / 9;
+
+    // Log5-style on per-inning rates (anchor at league avg per inning)
+    const lgPerInn = F5_LEAGUE_AVG_RPG / 9;
+    const expStarterShare = oppStartIP * (offPerInn / lgPerInn) * (starterRAperInn / lgPerInn) * lgPerInn;
+    const bullpenInn = Math.max(0, 5 - oppStartIP);
+    const expBullpenShare = bullpenInn * (offPerInn / lgPerInn) * (teamRAperInn / lgPerInn) * lgPerInn;
+    return expStarterShare + expBullpenShare;
+  }
+
+  const homeF5Raw = teamF5Runs(homeOff, awayStartRA, awayStartIP, input.away.runsAllowedPerGame || F5_LEAGUE_AVG_RPG);
+  const awayF5Raw = teamF5Runs(awayOff, homeStartRA, homeStartIP, input.home.runsAllowedPerGame || F5_LEAGUE_AVG_RPG);
+
+  // Modifiers (park, weather, ump — applied to F5 instead of full game)
+  const parkMult = (input.park.runs ?? 100) / 100;
+  modifiers.push({ name: 'Park', multiplier: parkMult, note: `${input.park.name} · runs factor ${input.park.runs}` });
+
+  const wx = weatherMultiplier(input.weather, input.park);
+  modifiers.push(wx);
+
+  // Travel/rest are full-game effects, very small for F5; we still expose them but at half magnitude
+  if (input.travel) {
+    const tr = travelRestMultiplier(input.travel);
+    for (const c of tr) {
+      const halved = 1 + (c.multiplier - 1) * 0.5;
+      modifiers.push({ name: c.name, multiplier: halved, note: `${c.note} (F5 half-weight)` });
+    }
+  } else {
+    modifiers.push({ name: 'Travel/Rest', multiplier: 1, note: 'No travel data' });
+  }
+
+  if (input.umpire) {
+    const ump = input.umpire;
+    const mult = ump.runsModifier ?? 1;
+    modifiers.push({
+      name: 'Umpire',
+      multiplier: mult,
+      note: ump.name
+        ? `${ump.name}${ump.kzBoost && ump.kzBoost !== 1 ? ` · KZ ${ump.kzBoost > 1 ? '+' : ''}${((ump.kzBoost - 1) * 100).toFixed(0)}%` : ' · neutral'}`
+        : 'No ump data — assumed neutral',
+    });
+  }
+
+  const totalMult = modifiers.reduce((m, c) => m * c.multiplier, 1);
+  const expectedHomeRuns = homeF5Raw * totalMult;
+  const expectedAwayRuns = awayF5Raw * totalMult;
+  const expectedTotal = expectedHomeRuns + expectedAwayRuns;
+
+  // CIs — Poisson with overdispersion, normal approx
+  const variance = F5_OVERDISPERSION * expectedTotal;
+  const sd = Math.sqrt(variance);
+  const ci80 = { low: Math.max(0, expectedTotal - 1.282 * sd), high: expectedTotal + 1.282 * sd };
+  const ci95 = { low: Math.max(0, expectedTotal - 1.96 * sd), high: expectedTotal + 1.96 * sd };
+
+  // Home win prob (F5 only — ties possible, modeled as normal on diff and we count P(diff>0))
+  const diffMean = expectedHomeRuns - expectedAwayRuns;
+  const diffSD = Math.sqrt(F5_OVERDISPERSION * (expectedHomeRuns + expectedAwayRuns));
+  const z = diffSD > 0 ? diffMean / diffSD : 0;
+  const pHomeWin = normalCdf(z);
+
+  // P(F5 over X.5) via Poisson tail on expectedTotal
+  const pTotalOver = [2.5, 3.5, 4.5, 5.5, 6.5].map((line) => ({
+    line,
+    prob: 1 - poissonCdf(Math.floor(line), expectedTotal),
+  }));
+
+  // P(NRFI) — no runs in first inning. Lambda_first ≈ totalLambda / 5.
+  const lambdaFirstInning = expectedTotal / 5;
+  const pNRFI = Math.exp(-lambdaFirstInning);
+
+  // Per-starter projected lines through their F5 share
+  const starters = {
+    away: starterLine(input.awayStarter, awayStartIP, input.home, input.park, totalMult, input.umpire?.kzBoost ?? 1),
+    home: starterLine(input.homeStarter, homeStartIP, input.away, input.park, totalMult, input.umpire?.kzBoost ?? 1),
+  };
+
+  // Confidence
+  const reasons: string[] = [];
+  let score = 50;
+  if (input.homeStarter?.fip) { score += 12; reasons.push('home starter FIP known'); }
+  if (input.awayStarter?.fip) { score += 12; reasons.push('away starter FIP known'); }
+  if (input.weather && (input.weather.tempF || input.weather.windSpeedMph)) { score += 6; reasons.push('weather data present'); }
+  if ((ci95.high - ci95.low) / Math.max(1, expectedTotal) < 0.7) { score += 6; reasons.push('tight CI'); }
+  if (warnings.length) { score -= 12 * warnings.length; reasons.push(`${warnings.length} input gap${warnings.length === 1 ? '' : 's'}`); }
+  score = Math.max(0, Math.min(100, score));
+  const level: Confidence['level'] = score >= 70 ? 'high' : score >= 50 ? 'medium' : 'low';
+  const confidence: Confidence = { level, score, reasons };
+
+  return {
+    expectedHomeRuns,
+    expectedAwayRuns,
+    expectedTotal,
+    modifiers,
+    ci80,
+    ci95,
+    pHomeWin,
+    pTotalOver,
+    pNRFI,
+    starters,
+    confidence,
+    warnings,
+  };
+}
+
+function starterLine(
+  starter: StarterInput | undefined,
+  inningsCovered: number,
+  oppOff: TeamOffenseDefense,
+  park: ParkProfile,
+  weatherTotalMult: number,
+  umpKZ: number
+): First5StarterLine | null {
+  if (!starter) return null;
+
+  // Synthesize per-inning rates from the starter object — use sensible defaults if missing
+  // FIP gives ER scale; we infer K/BB/HR/Hit rates from the starter's expected ERA-equivalent.
+  // For a more accurate per-stat decomposition we'd want pitcherK9/BB9/HR9 — those are NOT
+  // on StarterInput today, so we use the starter's FIP plus league-average ratios.
+  const fip = starter.fip ?? 4.10;
+  // Rough per-9 split from a typical pitcher with this FIP — using:
+  //   K/9 ≈ scale relative to league 8.5
+  //   BB/9 ≈ from FIP residual (higher FIP usually = more BB+HR)
+  // This is intentionally simple — the per-pitcher prop endpoint on the game page gives
+  // the high-fidelity numbers; this is a quick rollup for the F5 view.
+  const k9Estimate = Math.max(5, Math.min(13, 8.5 + (4.10 - fip) * 1.2));
+  const bb9Estimate = Math.max(1.5, Math.min(5.5, 3.0 + (fip - 4.10) * 0.6));
+  const hr9Estimate = Math.max(0.6, Math.min(2.0, 1.2 + (fip - 4.10) * 0.4));
+  const whipEstimate = Math.max(0.95, Math.min(1.55, 1.30 + (fip - 4.10) * 0.05));
+
+  const expectedK = inningsCovered * (k9Estimate / 9) * umpKZ * ((park.so ?? 100) / 100);
+  const expectedBB = inningsCovered * (bb9Estimate / 9) / umpKZ;
+  const expectedHRs = inningsCovered * (hr9Estimate / 9) * ((park.hr ?? 100) / 100) * weatherTotalMult;
+  const expectedHits = inningsCovered * Math.max(0, whipEstimate - bb9Estimate / 9);
+  // ER via FIP scaled to inningsCovered, weather modulated
+  const expectedRuns = inningsCovered * (fip / 9) * weatherTotalMult;
+
+  return {
+    inningsCovered,
+    expectedK,
+    expectedBB,
+    expectedHits,
+    expectedHRs,
+    expectedRuns,
+  };
+}

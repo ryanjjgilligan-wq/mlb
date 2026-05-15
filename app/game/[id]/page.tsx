@@ -20,6 +20,7 @@ import {
   predictRunTotal,
   predictBatterProp,
   predictPitcherProp,
+  predictFirst5,
   type RunTotalInput,
   type WeatherInput,
 } from '@/lib/predict';
@@ -198,6 +199,7 @@ export default async function GamePage({ params }: { params: { id: string } }) {
     umpire,
   };
   const runTotal = predictRunTotal(runTotalInput);
+  const first5 = predictFirst5(runTotalInput);
   const weatherMult = runTotal.modifiers.find((m) => m.name === 'Weather')?.multiplier ?? 1;
   const umpKZ = umpire?.kzBoost ?? 1;
 
@@ -443,6 +445,114 @@ export default async function GamePage({ params }: { params: { id: string } }) {
             weatherSummary={weatherSummary}
             travelSummary={travelSummary}
           />
+        </Panel>
+
+        {/* First 5 innings prediction */}
+        <Panel
+          className="lg:col-span-12"
+          title="First 5 innings (F5)"
+          subtitle="Starter-anchored sub-game model · innings 1–5 only"
+        >
+          <div className="grid grid-cols-1 md:grid-cols-[260px_1fr] gap-6">
+            <div className="space-y-3 self-start">
+              <div>
+                <div className="label-micro">F5 expected total</div>
+                <div className="stat-num text-3xl font-semibold">{first5.expectedTotal.toFixed(2)}</div>
+                <div className="text-2xs text-ink-faint">
+                  80% CI <span className="stat-num">{first5.ci80.low.toFixed(1)}–{first5.ci80.high.toFixed(1)}</span>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3 pt-3 border-t border-line-subtle">
+                <div>
+                  <div className="label-micro">{away.teamName}</div>
+                  <div className="stat-num text-xl font-semibold">{first5.expectedAwayRuns.toFixed(2)}</div>
+                </div>
+                <div>
+                  <div className="label-micro">{home.teamName}</div>
+                  <div className="stat-num text-xl font-semibold">{first5.expectedHomeRuns.toFixed(2)}</div>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3 pt-3 border-t border-line-subtle">
+                <div>
+                  <div className="label-micro">F5 home WP</div>
+                  <div className="stat-num text-xl font-semibold">{(first5.pHomeWin * 100).toFixed(1)}%</div>
+                </div>
+                <div title="No Runs in First Inning">
+                  <div className="label-micro">P(NRFI)</div>
+                  <div className="stat-num text-xl font-semibold">{(first5.pNRFI * 100).toFixed(1)}%</div>
+                </div>
+              </div>
+              <div className="pt-3 border-t border-line-subtle">
+                <div className="label-micro mb-1">Confidence</div>
+                <div className="flex items-center gap-2">
+                  <div className="h-1.5 flex-1 bg-bg-sunken rounded overflow-hidden">
+                    <div
+                      className={`h-full ${first5.confidence.level === 'high' ? 'bg-signal-pos' : first5.confidence.level === 'medium' ? 'bg-signal-info' : 'bg-ink-muted'}`}
+                      style={{ width: `${first5.confidence.score}%` }}
+                    />
+                  </div>
+                  <span className="text-2xs stat-num text-ink-muted">{first5.confidence.score}/100</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <div className="label-micro mb-2">P(F5 total over X.5)</div>
+                <div className="grid grid-cols-5 gap-2">
+                  {first5.pTotalOver.map((p) => (
+                    <div key={p.line} className="bg-bg-raised border border-line rounded text-center py-2">
+                      <div className="text-2xs text-ink-faint stat-num">o{p.line}</div>
+                      <div className="stat-num font-medium text-ink text-sm">{(p.prob * 100).toFixed(0)}%</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <div className="label-micro mb-2">Starter F5 projections</div>
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-2xs uppercase tracking-micro text-ink-muted border-b border-line">
+                      <th className="text-left font-medium pb-1.5">Pitcher</th>
+                      <th className="text-right font-medium pb-1.5">IP</th>
+                      <th className="text-right font-medium pb-1.5">xK</th>
+                      <th className="text-right font-medium pb-1.5">xBB</th>
+                      <th className="text-right font-medium pb-1.5">xH</th>
+                      <th className="text-right font-medium pb-1.5">xHR</th>
+                      <th className="text-right font-medium pb-1.5">xER</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[
+                      { side: 'Away', name: awayProbable?.fullName, id: awayProbable?.id, line: first5.starters.away },
+                      { side: 'Home', name: homeProbable?.fullName, id: homeProbable?.id, line: first5.starters.home },
+                    ].map((row, i) => (
+                      <tr key={i} className="row-hover border-b border-line-subtle last:border-0">
+                        <td className="py-1.5">
+                          {row.id && row.name ? (
+                            <Link href={`/player/${row.id}`} className="hover:text-accent text-sm">{row.name}</Link>
+                          ) : (
+                            <span className="text-ink-muted text-sm">{row.name ?? `${row.side} TBD`}</span>
+                          )}
+                        </td>
+                        <td className="text-right stat-num text-ink-muted">{row.line ? row.line.inningsCovered.toFixed(1) : '—'}</td>
+                        <td className="text-right stat-num text-ink">{row.line ? row.line.expectedK.toFixed(1) : '—'}</td>
+                        <td className="text-right stat-num text-ink-muted">{row.line ? row.line.expectedBB.toFixed(1) : '—'}</td>
+                        <td className="text-right stat-num text-ink-muted">{row.line ? row.line.expectedHits.toFixed(1) : '—'}</td>
+                        <td className="text-right stat-num text-ink-muted">{row.line ? row.line.expectedHRs.toFixed(2) : '—'}</td>
+                        <td className="text-right stat-num text-ink">{row.line ? row.line.expectedRuns.toFixed(2) : '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p className="text-2xs text-ink-faint mt-2">
+                  Per-starter rates synthesized from FIP + IP/start. Park & ump factors applied.
+                  Method on <Link href="/lab" className="underline">/lab</Link>.
+                </p>
+              </div>
+            </div>
+          </div>
         </Panel>
 
         {/* Player props — pitchers */}

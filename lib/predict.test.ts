@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { predictRunTotal, predictBatterProp, predictPitcherProp } from './predict';
+import { predictRunTotal, predictBatterProp, predictPitcherProp, predictFirst5 } from './predict';
 import { NEUTRAL_PARK, getPark, haversineMiles, PARKS } from './parks';
 
 describe('predictRunTotal — neutral inputs', () => {
@@ -101,6 +101,53 @@ describe('predictPitcherProp', () => {
     const lo = predictPitcherProp({ oppKRate: 0.18, pitcherK9: 10, pitcherIpPerStart: 6 });
     const hi = predictPitcherProp({ oppKRate: 0.28, pitcherK9: 10, pitcherIpPerStart: 6 });
     expect(hi.expectedStrikeouts).toBeGreaterThan(lo.expectedStrikeouts);
+  });
+});
+
+describe('First 5 (F5) predictor', () => {
+  const baseInput = {
+    home: { teamId: 1, runsScoredPerGame: 4.5, runsAllowedPerGame: 4.5 },
+    away: { teamId: 2, runsScoredPerGame: 4.5, runsAllowedPerGame: 4.5 },
+    park: NEUTRAL_PARK,
+  };
+  it('Neutral inputs → ~5 F5 runs', () => {
+    const r = predictFirst5(baseInput);
+    expect(r.expectedTotal).toBeGreaterThan(4.0);
+    expect(r.expectedTotal).toBeLessThan(6.0);
+  });
+  it('Two ace starters cut F5 runs vs replacement-level', () => {
+    const aces = predictFirst5({
+      ...baseInput,
+      homeStarter: { fip: 2.50, ipPerStart: 6 },
+      awayStarter: { fip: 2.50, ipPerStart: 6 },
+    });
+    const repl = predictFirst5({
+      ...baseInput,
+      homeStarter: { fip: 5.50, ipPerStart: 4.5 },
+      awayStarter: { fip: 5.50, ipPerStart: 4.5 },
+    });
+    expect(aces.expectedTotal).toBeLessThan(repl.expectedTotal);
+  });
+  it('Coors lifts F5 total', () => {
+    const coors = predictFirst5({ ...baseInput, park: PARKS[2680]! });
+    expect(coors.expectedTotal).toBeGreaterThan(5.5);
+  });
+  it('P(NRFI) is between 0 and 1', () => {
+    const r = predictFirst5(baseInput);
+    expect(r.pNRFI).toBeGreaterThan(0);
+    expect(r.pNRFI).toBeLessThan(1);
+  });
+  it('P(over X.5) is monotonically decreasing in X', () => {
+    const r = predictFirst5(baseInput);
+    for (let i = 1; i < r.pTotalOver.length; i++) {
+      expect(r.pTotalOver[i].prob).toBeLessThanOrEqual(r.pTotalOver[i - 1].prob);
+    }
+  });
+  it('Starter line surfaces when starter info present', () => {
+    const r = predictFirst5({ ...baseInput, homeStarter: { fip: 3.50, ipPerStart: 5.5 } });
+    expect(r.starters.home).not.toBeNull();
+    expect(r.starters.home!.expectedK).toBeGreaterThan(2);
+    expect(r.starters.home!.inningsCovered).toBeGreaterThan(2);
   });
 });
 

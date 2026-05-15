@@ -147,6 +147,26 @@ export default function LabPage() {
           ]}
         />
         <Section
+          name="First 5 innings (F5) prediction"
+          status="baseline"
+          formula={
+            "Per side: λ_F5 = 5 inn × (off R/9 / 9), with opp pitching split between\n" +
+            "  starter (FIP for IP/start innings, capped at 5) and bullpen (team RA/G).\n" +
+            "Total F5 ~ Poisson(λ_total) with overdispersion ψ = 1.4.\n" +
+            "Modifiers (park, weather, ump) applied at full magnitude. Travel/rest at half\n" +
+            "magnitude (smaller-sample horizon).\n" +
+            "P(NRFI) = exp(-λ_total/5) — first-inning Poisson tail.\n" +
+            "P(over X.5) via Poisson CDF on λ_total."
+          }
+          source="Standard sub-game segment model; see Fangraphs F5 articles for the dominant-starter rationale."
+          notes={[
+            'In F5, the starting pitcher carries ~95% of the workload (avg starter IP/start ≈ 5.3 in 2024-26).',
+            'Per-starter K/BB/H/HR/ER rates synthesized from FIP + league-average shape, then scaled by inningsCovered, park SO/HR factors, and ump KZ.',
+            '6 unit tests verify neutral inputs ≈ 5 F5 runs, two aces cut total vs replacement-level, Coors lifts F5, P(NRFI) bounded, P(over X.5) monotonically decreasing in X.',
+            'The full per-pitcher prop endpoint on the game page provides higher-fidelity individual K/BB/H/HR projections — F5 starter line is a quick rollup.',
+          ]}
+        />
+        <Section
           name="League-context metrics — wRC+, OPS+, ERA−"
           status="solid"
           formula={
@@ -301,6 +321,7 @@ export default function LabPage() {
           <li>League-context-adjusted metrics: wRC+, OPS+, ERA− with per-season league baselines</li>
           <li>Recent-transactions wire on the home page (last 5 days, MLB /transactions)</li>
           <li>Markov-chain lineup expected-runs simulator (lib/markov.ts) + heuristic optimizer</li>
+          <li>First 5 innings (F5) sub-game predictor with starter-anchored projections, NRFI prob, and over/under lines</li>
         </ul>
       </Panel>
 
