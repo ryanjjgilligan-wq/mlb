@@ -90,7 +90,13 @@ export default async function PlayerPage({ params }: { params: { id: string } })
             <h1 className="text-2xl font-semibold tracking-tight">{player.fullName}</h1>
             <Badge variant="accent">{player.primaryPosition.abbreviation}</Badge>
             {player.primaryNumber && <Badge>#{player.primaryNumber}</Badge>}
-            <span className="ml-auto">
+            <span className="ml-auto flex items-center gap-2">
+              <Link
+                href={`/compare?players=${player.id}&mode=${isPitcher ? 'pitcher' : 'hitter'}`}
+                className="inline-flex items-center gap-1.5 px-2 py-1 rounded border border-line text-2xs text-ink-muted hover:text-ink hover:bg-bg-hover"
+              >
+                Compare
+              </Link>
               <WatchButton
                 type="player"
                 id={player.id}

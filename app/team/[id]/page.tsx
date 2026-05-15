@@ -132,7 +132,13 @@ export default async function TeamPage({ params }: { params: { id: string } }) {
             <Badge>{team.abbreviation}</Badge>
             {team.league && <Badge variant="info">{team.league.name}</Badge>}
             {team.division && <Badge>{team.division.name}</Badge>}
-            <span className="ml-auto">
+            <span className="ml-auto flex items-center gap-2">
+              <Link
+                href={`/compare?teams=${team.id}&mode=team`}
+                className="inline-flex items-center gap-1.5 px-2 py-1 rounded border border-line text-2xs text-ink-muted hover:text-ink hover:bg-bg-hover"
+              >
+                Compare
+              </Link>
               <WatchButton type="team" id={team.id} name={team.name} meta={team.abbreviation} />
             </span>
           </div>
