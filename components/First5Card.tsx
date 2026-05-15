@@ -21,6 +21,11 @@ export type First5CardData = {
     f5Complete: boolean;
     firstInningRuns: number;
     firstInningComplete: boolean;
+    /** Current actual total team scores — undefined pre-game. */
+    awayRuns?: number;
+    homeRuns?: number;
+    inningState?: string;
+    currentInning?: number;
   };
 };
 
@@ -72,22 +77,51 @@ export function First5Card({ d }: { d: First5CardData }) {
       </header>
 
       <div className="p-4 space-y-4">
-        {/* Score-style hero */}
-        <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-4">
+        {/* HERO — actual current score is the headline; F5 projection is supporting */}
+        <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
+          {/* Away team */}
           <Link href={`/team/${d.away.id}`} className="flex items-center gap-2 min-w-0">
-            <img src={teamCapLogoUrl(d.away.id)} alt="" className="w-6 h-6 team-logo opacity-90" />
-            <span className="text-sm font-medium truncate">{d.away.abbr ?? d.away.name}</span>
-          </Link>
-          <div className="text-center">
-            <div className="label-micro">F5 totals</div>
-            <div className="stat-num text-2xl font-semibold mt-0.5">
-              {o.expectedAwayRuns.toFixed(2)}–{o.expectedHomeRuns.toFixed(2)}
+            <img src={teamCapLogoUrl(d.away.id)} alt="" className="w-7 h-7 team-logo opacity-95 shrink-0" />
+            <div className="min-w-0">
+              <div className="text-2xs text-ink-muted truncate">{d.away.abbr ?? d.away.name}</div>
+              {d.actual ? (
+                <div className="stat-num text-3xl font-bold leading-none">{d.actual.awayRuns ?? 0}</div>
+              ) : (
+                <div className="stat-num text-base font-semibold text-ink-muted">—</div>
+              )}
             </div>
-            <div className="text-2xs text-ink-faint stat-num">{o.expectedTotal.toFixed(2)} total</div>
+          </Link>
+
+          {/* Center column — current state OR pre-game label */}
+          <div className="text-center px-2">
+            {d.actual ? (
+              <>
+                <div className="label-micro">{d.status === 'final' ? 'Final' : `${d.actual.inningState ?? ''} ${d.actual.currentInning ?? ''}`}</div>
+                <div className="text-2xs text-ink-faint stat-num mt-1">F5 proj <span className="text-ink-muted">{o.expectedAwayRuns.toFixed(1)}–{o.expectedHomeRuns.toFixed(1)}</span></div>
+                <div className="text-2xs text-ink-faint stat-num">{o.expectedTotal.toFixed(1)} total</div>
+              </>
+            ) : (
+              <>
+                <div className="label-micro">F5 projection</div>
+                <div className="stat-num text-2xl font-semibold mt-0.5">
+                  {o.expectedAwayRuns.toFixed(1)}–{o.expectedHomeRuns.toFixed(1)}
+                </div>
+                <div className="text-2xs text-ink-faint stat-num">{o.expectedTotal.toFixed(1)} total runs</div>
+              </>
+            )}
           </div>
+
+          {/* Home team */}
           <Link href={`/team/${d.home.id}`} className="flex items-center justify-end gap-2 min-w-0">
-            <span className="text-sm font-medium truncate text-right">{d.home.abbr ?? d.home.name}</span>
-            <img src={teamCapLogoUrl(d.home.id)} alt="" className="w-6 h-6 team-logo opacity-90" />
+            <div className="min-w-0 text-right">
+              <div className="text-2xs text-ink-muted truncate">{d.home.abbr ?? d.home.name}</div>
+              {d.actual ? (
+                <div className="stat-num text-3xl font-bold leading-none">{d.actual.homeRuns ?? 0}</div>
+              ) : (
+                <div className="stat-num text-base font-semibold text-ink-muted">—</div>
+              )}
+            </div>
+            <img src={teamCapLogoUrl(d.home.id)} alt="" className="w-7 h-7 team-logo opacity-95 shrink-0" />
           </Link>
         </div>
 

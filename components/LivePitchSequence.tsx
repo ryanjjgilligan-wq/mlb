@@ -42,83 +42,137 @@ export function LivePitchSequence({
 }: LivePitchSequenceProps) {
   if (!pitches.length) {
     return (
-      <div className="px-4 py-6 text-2xs text-ink-faint text-center">
+      <div className="px-6 py-8 text-2xs text-ink-faint text-center">
         Awaiting first pitch of the at-bat.
       </div>
     );
   }
+
   return (
-    <div className="px-4 py-4 space-y-3">
-      {/* Top header strip — Balls / Strikes / Outs as pixel dots */}
-      <div className="grid grid-cols-3 gap-4">
-        <CountStrip label="Balls" current={count.balls} max={4} color="#16a34a" />
-        <CountStrip label="Strikes" current={count.strikes} max={3} color="#dc2626" />
-        <CountStrip label="Outs" current={outs} max={3} color="#525252" />
+    <div className="p-4 space-y-4">
+      {/* HEADER — matchup name + count tiles inline */}
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div className="min-w-0">
+          <div className="label-micro">Current at-bat</div>
+          <div className="text-base font-semibold text-ink truncate mt-0.5">
+            {batterName ?? 'Batter'} <span className="text-ink-faint font-normal mx-1">vs</span> {pitcherName ?? 'Pitcher'}
+          </div>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <CountTile label="B" current={count.balls} max={4} color="#16a34a" />
+          <CountTile label="S" current={count.strikes} max={3} color="#dc2626" />
+          <CountTile label="O" current={outs} max={3} color="#737373" />
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-[1fr_320px] gap-4 items-start">
-        {/* Strike zone with batter silhouette */}
-        <div>
-          <div className="flex items-end gap-2">
-            {batterBats !== 'L' && <BatterSilhouette side="left" />}
-            <StrikeZone pitches={pitches} />
-            {batterBats === 'L' && <BatterSilhouette side="right" />}
+      {/* MAIN — strike zone + silhouette glued together; pitch log fills right */}
+      <div className="grid grid-cols-1 lg:grid-cols-[auto_minmax(0,1fr)] gap-4 items-start">
+        {/* Zone block — single panel containing batter + zone with no dead space */}
+        <div className="bg-bg-raised rounded-lg border border-line p-3">
+          <div className="flex items-end gap-1 justify-center">
+            {batterBats === 'L' ? (
+              <>
+                <StrikeZone pitches={pitches} />
+                <BatterSilhouette side="right" />
+              </>
+            ) : (
+              <>
+                <BatterSilhouette side="left" />
+                <StrikeZone pitches={pitches} />
+              </>
+            )}
           </div>
-          <div className="text-2xs text-ink-faint mt-1.5 text-center">
-            catcher's view · last pitch glows
+          <div className="flex items-center justify-between mt-2 px-1 text-2xs text-ink-faint">
+            <span>catcher's view</span>
+            <span className="flex items-center gap-1">
+              last pitch
+              <span className="inline-block w-2 h-2 rounded-full bg-accent shadow-[0_0_8px_rgba(250,204,21,0.6)]" />
+              glows
+            </span>
           </div>
         </div>
 
-        {/* Pitch log */}
-        <div>
-          <div className="label-micro mb-1.5">{batterName ? `${batterName} ` : ''}vs {pitcherName ?? ''}</div>
+        {/* Pitch log — fills the right column with consistent cards */}
+        <div className="min-w-0">
+          <div className="flex items-center justify-between mb-2">
+            <span className="label-micro">Pitch sequence</span>
+            <span className="text-2xs text-ink-faint stat-num">{pitches.length} pitch{pitches.length === 1 ? '' : 'es'}</span>
+          </div>
           <div className="space-y-1.5">
-            {[...pitches].reverse().map((p) => (
-              <PitchRow key={p.index} p={p} />
+            {[...pitches].reverse().map((p, i) => (
+              <PitchRow key={p.index} p={p} isLatest={i === 0} />
             ))}
           </div>
         </div>
       </div>
 
-      {/* On-base footer */}
-      {bases && (
-        <div className="pt-3 border-t border-line-subtle flex items-center gap-3 text-2xs">
-          <BaseDiamond
-            first={!!bases.first}
-            second={!!bases.second}
-            third={!!bases.third}
-          />
-          <span className="label-micro">On base</span>
-          <span className="text-ink-muted truncate">
-            {bases.first ? <><strong className="text-ink stat-num">1B:</strong> {bases.first.name}</> : <span className="text-ink-faint">1B: empty</span>}
-            <span className="px-2 text-ink-faint">·</span>
-            {bases.second ? <><strong className="text-ink stat-num">2B:</strong> {bases.second.name}</> : <span className="text-ink-faint">2B: empty</span>}
-            <span className="px-2 text-ink-faint">·</span>
-            {bases.third ? <><strong className="text-ink stat-num">3B:</strong> {bases.third.name}</> : <span className="text-ink-faint">3B: empty</span>}
-          </span>
+      {/* BOTTOM — on-base + color legend in one clean strip */}
+      <div className="flex items-center justify-between gap-4 pt-3 border-t border-line-subtle flex-wrap">
+        <div className="flex items-center gap-3">
+          <BaseDiamond first={!!bases?.first} second={!!bases?.second} third={!!bases?.third} />
+          <div className="flex items-center gap-3 text-2xs">
+            <BaseChip label="1B" name={bases?.first?.name} />
+            <BaseChip label="2B" name={bases?.second?.name} />
+            <BaseChip label="3B" name={bases?.third?.name} />
+          </div>
         </div>
-      )}
+        <div className="flex items-center gap-3 text-2xs">
+          <LegendDot color="#dc2626" label="Ball" />
+          <LegendDot color="#16a34a" label="Called K" />
+          <LegendDot color="#2563eb" label="Whiff" />
+          <LegendDot color="#fb923c" label="Foul" />
+          <LegendDot color="#facc15" label="In play" />
+        </div>
+      </div>
     </div>
   );
 }
 
-function CountStrip({ label, current, max, color }: { label: string; current: number; max: number; color: string }) {
+function CountTile({ label, current, max, color }: { label: string; current: number; max: number; color: string }) {
   return (
-    <div className="flex items-center gap-2">
-      <span className="label-micro">{label}</span>
-      <div className="flex items-center gap-1.5">
+    <div className="flex items-center gap-1.5 px-2 py-1 rounded border border-line bg-bg-raised">
+      <span className="text-2xs uppercase tracking-micro font-semibold text-ink-muted">{label}</span>
+      <div className="flex items-center gap-1">
         {Array.from({ length: max }).map((_, i) => (
           <span
             key={i}
-            className="w-2.5 h-2.5 rounded-full transition-colors"
+            className="w-2 h-2 rounded-full"
             style={{
               background: i < current ? color : 'transparent',
               border: i < current ? `1px solid ${color}` : '1px solid var(--line-strong)',
+              boxShadow: i < current ? `0 0 4px ${color}55` : undefined,
             }}
           />
         ))}
       </div>
+      <span className="stat-num text-xs font-bold text-ink ml-0.5">{current}</span>
     </div>
+  );
+}
+
+function BaseChip({ label, name }: { label: string; name?: string }) {
+  if (!name) {
+    return (
+      <span className="inline-flex items-center gap-1 text-ink-faint">
+        <span className="stat-num text-2xs">{label}</span>
+        <span>empty</span>
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span className="stat-num text-2xs text-ink-faint">{label}</span>
+      <span className="text-ink font-medium">{name}</span>
+    </span>
+  );
+}
+
+function LegendDot({ color, label }: { color: string; label: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 text-ink-faint whitespace-nowrap">
+      <span className="w-2 h-2 rounded-full" style={{ background: color }} />
+      {label}
+    </span>
   );
 }
 
@@ -159,14 +213,14 @@ function BaseDiamond({ first, second, third }: { first: boolean; second: boolean
   );
 }
 
-function PitchRow({ p }: { p: LivePitchEvent }) {
-  const isBall = (p.description ?? '').toLowerCase().includes('ball');
-  const isFoul = (p.description ?? '').toLowerCase().includes('foul');
-  const isInPlay = p.isInPlay;
-  const isStrike = !isBall && !isFoul && !isInPlay;
+function PitchRow({ p, isLatest = false }: { p: LivePitchEvent; isLatest?: boolean }) {
   const dotColor = pitchColor(p);
   return (
-    <div className="flex items-center gap-3 p-2 rounded border border-line bg-bg-raised">
+    <div
+      className={`flex items-center gap-3 p-2 rounded border bg-bg-raised ${
+        isLatest ? 'border-accent/40 shadow-[0_0_12px_rgba(250,204,21,0.12)]' : 'border-line'
+      }`}
+    >
       <div
         className="w-7 h-7 rounded-full flex items-center justify-center stat-num text-xs font-bold shrink-0"
         style={{ background: dotColor, color: '#0a0a0b' }}

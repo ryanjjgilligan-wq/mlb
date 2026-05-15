@@ -28,7 +28,7 @@ import { TeamStatsCompare } from '@/components/TeamStatsCompare';
 import { ScoringSummary } from '@/components/ScoringSummary';
 import { LastPlayCard } from '@/components/LastPlayCard';
 import { LiveStatsStrip } from '@/components/LiveStatsStrip';
-import { liveProjectedTotal, gradeNRFI, gradeF5 } from '@/lib/liveAdjust';
+import { liveProjectedTotal, gradeNRFI, gradeF5, buildLiveWPSeries } from '@/lib/liveAdjust';
 import type { LiveGameState } from '@/lib/liveAdjust';
 import { H2HPanel } from '@/components/H2HPanel';
 import { BvPMatrix } from '@/components/BvPMatrix';
@@ -364,8 +364,8 @@ export default async function GamePage({ params }: { params: { id: string } }) {
   const homePyth = homeRec ? pythagorean(homeRec.runsScored ?? 0, homeRec.runsAllowed ?? 0) : 0.5;
   const { homeWP, confidence } = preGameHomeWP(0, 0, homePyth, awayPyth);
 
-  // Transform live WP series into chart points
-  const wpPoints: WPPoint[] = (wpHistory ?? []).map((p: any, i: number) => ({
+  // Transform MLB's live WP series into chart points
+  const mlbWPPoints: WPPoint[] = (wpHistory ?? []).map((p: any, i: number) => ({
     idx: i,
     inning: p.about?.inning ?? 0,
     half: p.about?.halfInning === 'top' ? 'top' : 'bot',
@@ -374,6 +374,33 @@ export default async function GamePage({ params }: { params: { id: string } }) {
       : 0.5,
     desc: p.result?.description ?? p.about?.halfInning + ' ' + (p.about?.inning ?? ''),
   }));
+
+  // Fallback: when MLB hasn't published per-play WP yet (common in early
+  // innings) but the game IS in progress or final, derive a live WP curve
+  // from the actual scoring + score-state model. This keeps the chart
+  // moving up and down as the game unfolds rather than showing a static
+  // pre-game flat line.
+  const wpFromOurModel = (() => {
+    if (mlbWPPoints.length > 0) return null;
+    if (!isLive && !isFinal) return null;
+    if (!linescore?.innings || linescore.innings.length === 0) return null;
+    const liveStateForWP: any = {
+      inning: linescore.currentInning ?? 0,
+      isTopInning: !!linescore.isTopInning,
+      outs: linescore.outs ?? 0,
+      awayRuns: linescore.teams?.away?.runs ?? 0,
+      homeRuns: linescore.teams?.home?.runs ?? 0,
+      innings: linescore.innings.map((i: any) => ({
+        num: i.num,
+        away: { runs: i.away?.runs },
+        home: { runs: i.home?.runs },
+      })),
+    };
+    return buildLiveWPSeries(liveStateForWP, runTotal.pHomeWin) as WPPoint[];
+  })();
+
+  const wpPoints: WPPoint[] = mlbWPPoints.length > 0 ? mlbWPPoints : (wpFromOurModel ?? []);
+  const wpSource: 'mlb' | 'model' | null = mlbWPPoints.length > 0 ? 'mlb' : wpFromOurModel ? 'model' : null;
 
   // Derive leverage events from WP swings — top swings by absolute WPA
   const leverageAll: LeveragePoint[] = [];
@@ -731,15 +758,20 @@ export default async function GamePage({ params }: { params: { id: string } }) {
           className="lg:col-span-7"
           title={
             <span className="flex items-center gap-2">
-              {wpPoints.length ? 'Live win probability' : 'Pre-game win probability'}
+              {isPreview ? 'Pre-game win probability' : 'Live win probability'}
               {isLive && <Badge variant="neg" pulse>LIVE</Badge>}
+              {wpSource === 'model' && (
+                <span className="text-2xs uppercase tracking-micro px-1.5 py-0.5 rounded border border-signal-info/30 bg-signal-info/5 text-signal-info">
+                  model-derived
+                </span>
+              )}
             </span>
           }
           subtitle={
-            wpPoints.length
-              ? `${wpPoints.length} plays · recalculated each pitch · refreshes every 5s`
-              : isLive
-              ? 'Live updates every 5s once MLB starts publishing per-play win probability'
+            wpSource === 'mlb'
+              ? `${wpPoints.length} plays from MLB · recalculated each pitch · refreshes every 5s`
+              : wpSource === 'model'
+              ? `Derived from score state + pre-game prior (MLB hasn't published per-play WP yet) · refreshes every 5s`
               : `Pre-game projection · home ${(runTotal.pHomeWin * 100).toFixed(1)}% from the run-total model`
           }
         >

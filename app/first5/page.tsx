@@ -119,7 +119,16 @@ export default async function First5Page({ searchParams }: { searchParams: { dat
           const firstInning = innings.find((i: any) => i.num === 1);
           const firstInningRuns = (firstInning?.away?.runs ?? 0) + (firstInning?.home?.runs ?? 0);
           const firstInningComplete = status === 'Final' || currentInning > 1 || (currentInning === 1 && !isTopInning && outs >= 3);
-          return { f5Runs: f5, f5Complete, firstInningRuns, firstInningComplete };
+          return {
+            f5Runs: f5,
+            f5Complete,
+            firstInningRuns,
+            firstInningComplete,
+            awayRuns: ls?.teams?.away?.runs ?? 0,
+            homeRuns: ls?.teams?.home?.runs ?? 0,
+            inningState: ls?.inningState,
+            currentInning,
+          };
         })(),
       };
     })
