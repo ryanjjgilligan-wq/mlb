@@ -318,6 +318,64 @@ export async function getLastGameForTeam(teamId: number, beforeDate: string, sea
   return games[0] ?? null;
 }
 
+/**
+ * Head-to-head schedule between two teams in a given season.
+ * Returns games sorted reverse-chronologically (most recent first).
+ */
+export async function getHeadToHeadSchedule(
+  teamA: number,
+  teamB: number,
+  season?: number
+): Promise<ScheduleGame[]> {
+  const s = season ?? new Date().getFullYear();
+  const data = await get<{ dates: ScheduleDate[] }>(
+    `/schedule?sportId=1&teamId=${teamA}&opponentId=${teamB}&season=${s}&hydrate=team,linescore,venue`,
+    { revalidate: 3600 }
+  );
+  return (data.dates ?? [])
+    .flatMap((d) => d.games)
+    .sort((a, b) => b.gameDate.localeCompare(a.gameDate));
+}
+
+/**
+ * Career batter-vs-pitcher line via the vsPlayer split.
+ * Returns the single combined-career split for the matchup, or null.
+ */
+export async function getBatterVsPitcher(batterId: number, pitcherId: number): Promise<any | null> {
+  const data = await get<any>(
+    `/people/${batterId}/stats?stats=vsPlayer&opposingPlayerId=${pitcherId}&group=hitting`,
+    { revalidate: 3600 }
+  ).catch(() => null);
+  // Combined-career split is type "vsPlayerTotal" / period "career" with sportId=1
+  const groups = data?.stats ?? [];
+  for (const g of groups) {
+    const split = (g.splits ?? []).find((sp: any) =>
+      sp?.season === undefined || sp?.season === ''
+    ) ?? g.splits?.[0];
+    if (split) return split;
+  }
+  return null;
+}
+
+/** Monthly splits — `byMonth` returns one row per calendar month played. */
+export async function getTeamMonthlyHitting(teamId: number, season?: number): Promise<any[]> {
+  const s = season ?? new Date().getFullYear();
+  const data = await get<any>(
+    `/teams/${teamId}/stats?stats=byMonth&group=hitting&season=${s}`,
+    { revalidate: 1800 }
+  );
+  return data?.stats?.[0]?.splits ?? [];
+}
+
+export async function getTeamMonthlyPitching(teamId: number, season?: number): Promise<any[]> {
+  const s = season ?? new Date().getFullYear();
+  const data = await get<any>(
+    `/teams/${teamId}/stats?stats=byMonth&group=pitching&season=${s}`,
+    { revalidate: 1800 }
+  );
+  return data?.stats?.[0]?.splits ?? [];
+}
+
 /** Remaining schedule for a team this season — Monte Carlo input. */
 export async function getRemainingSchedule(teamId: number, season?: number): Promise<ScheduleGame[]> {
   const s = season ?? new Date().getFullYear();

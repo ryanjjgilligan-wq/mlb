@@ -13,6 +13,7 @@ import { AutoRefresh } from '@/components/AutoRefresh';
 import { ymd } from '@/lib/time';
 import { LocalTime } from '@/components/LocalTime';
 import { LocalDate } from '@/components/LocalDate';
+import { Countdown } from '@/components/Countdown';
 import { Radio } from 'lucide-react';
 
 export const revalidate = 15;
@@ -177,7 +178,10 @@ export default async function LivePage() {
             {upcoming.slice(0, 8).map((g) => (
               <li key={g.gamePk}>
                 <Link href={`/game/${g.gamePk}`} className="flex items-center gap-3 px-3 py-2 row-hover">
-                  <LocalTime iso={g.gameDate} format="time" className="text-2xs text-ink-faint stat-num w-16" />
+                  <div className="w-20">
+                    <LocalTime iso={g.gameDate} format="time" className="text-2xs text-ink-faint stat-num block" />
+                    <Countdown iso={g.gameDate} status="Preview" className="block" />
+                  </div>
                   <img src={teamCapLogoUrl(g.teams.away.team.id)} alt="" className="w-4 h-4 team-logo opacity-80" />
                   <span className="text-sm text-ink-muted flex-1 truncate">{g.teams.away.team.name}</span>
                   <span className="text-2xs text-ink-faint">@</span>

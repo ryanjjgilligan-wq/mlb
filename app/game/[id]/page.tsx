@@ -7,9 +7,14 @@ import {
   getPlayerSplits,
   getPlayerSeasonStats,
   getLastGameForTeam,
+  getHeadToHeadSchedule,
+  getBatterVsPitcher,
   teamCapLogoUrl,
   playerHeadshotUrl,
 } from '@/lib/mlb';
+import { H2HPanel } from '@/components/H2HPanel';
+import { BvPMatrix } from '@/components/BvPMatrix';
+import { Countdown } from '@/components/Countdown';
 import { getPark, haversineMiles } from '@/lib/parks';
 import {
   predictRunTotal,
@@ -90,6 +95,28 @@ export default async function GamePage({ params }: { params: { id: string } }) {
     pullMatchups(homeBatters, awayStartHand),
   ]);
 
+  // Head-to-head (current + prior season) and per-batter vs starter career line
+  const currentSeason = new Date(gameData.datetime?.dateTime ?? Date.now()).getUTCFullYear();
+  const priorSeason = currentSeason - 1;
+  const [h2hCurrent, h2hPrior, awayBvpHomeStarter, homeBvpAwayStarter] = await Promise.all([
+    getHeadToHeadSchedule(home.id, away.id, currentSeason).catch(() => []),
+    getHeadToHeadSchedule(home.id, away.id, priorSeason).catch(() => []),
+    homeProbable?.id
+      ? Promise.all(awayBatters.map(async (bid) => ({
+          batterId: bid,
+          batterName: boxscoreEarly?.teams?.away?.players?.[`ID${bid}`]?.person?.fullName ?? '',
+          vs: await getBatterVsPitcher(bid, homeProbable.id).catch(() => null),
+        })))
+      : Promise.resolve([]),
+    awayProbable?.id
+      ? Promise.all(homeBatters.map(async (bid) => ({
+          batterId: bid,
+          batterName: boxscoreEarly?.teams?.home?.players?.[`ID${bid}`]?.person?.fullName ?? '',
+          vs: await getBatterVsPitcher(bid, awayProbable.id).catch(() => null),
+        })))
+      : Promise.resolve([]),
+  ]);
+
   // ── Predictions inputs ───────────────────────────────────────────────────
   const gameDateOnly = (gameData.datetime?.officialDate ?? gameData.datetime?.dateTime?.slice(0, 10) ?? '');
   const venueId = gameData.venue?.id;
@@ -143,6 +170,15 @@ export default async function GamePage({ params }: { params: { id: string } }) {
     };
   };
 
+  // Umpire — pulled from boxscore officials. Until we have a per-ump
+  // historical aggregator, kzBoost defaults to 1.0 (neutral) and gets
+  // surfaced informationally.
+  const officials: any[] = boxscore?.officials ?? [];
+  const homePlateUmp = officials.find((o: any) => /home plate/i.test(o.officialType ?? ''))?.official;
+  const umpire = homePlateUmp
+    ? { name: homePlateUmp.fullName as string, kzBoost: 1, runsModifier: 1 }
+    : undefined;
+
   const runTotalInput: RunTotalInput = {
     home: {
       teamId: home.id,
@@ -159,10 +195,13 @@ export default async function GamePage({ params }: { params: { id: string } }) {
     park,
     weather,
     travel: { awayTravelMiles, awayDaysRest, homeDaysRest },
+    umpire,
   };
   const runTotal = predictRunTotal(runTotalInput);
+  const weatherMult = runTotal.modifiers.find((m) => m.name === 'Weather')?.multiplier ?? 1;
+  const umpKZ = umpire?.kzBoost ?? 1;
 
-  // Per-batter hit/TB props
+  // Per-batter expanded props (hits, TB, HR, walks, Ks, doubles)
   const batterPropFor = (split: any, oppStarterStats: any) => {
     const s = split?.stat;
     if (!s) return null;
@@ -170,20 +209,30 @@ export default async function GamePage({ params }: { params: { id: string } }) {
     const obp = parseFloat(s.obp ?? '0');
     const slg = parseFloat(s.slg ?? '0');
     const ab = Number(s.atBats);
+    const pa = Number(s.plateAppearances) || ab;
     const hr = Number(s.homeRuns);
-    const hrRate = ab > 0 ? hr / ab : undefined;
+    const doubles = Number(s.doubles);
+    const bb = Number(s.baseOnBalls);
+    const k = Number(s.strikeOuts);
     const oppPa = Number(oppStarterStats?.stat?.battersFaced ?? 0);
     const oppKRate = oppPa > 0 ? Number(oppStarterStats?.stat?.strikeOuts ?? 0) / oppPa : undefined;
+    const oppBBRate = oppPa > 0 ? Number(oppStarterStats?.stat?.baseOnBalls ?? 0) / oppPa : undefined;
     const oppHrRate = ab > 0 ? Number(oppStarterStats?.stat?.homeRuns ?? 0) / Math.max(1, Number(oppStarterStats?.stat?.battersFaced ?? ab)) : undefined;
     return predictBatterProp({
       pa: 4.2,
       avg, obp, slg,
-      homeRunRate: hrRate,
+      homeRunRate: ab > 0 ? hr / ab : undefined,
+      doublesPerAb: ab > 0 ? doubles / ab : undefined,
+      walkRate: pa > 0 ? bb / pa : undefined,
+      kRate: pa > 0 ? k / pa : undefined,
       oppPitcherKRate: oppKRate,
+      oppPitcherBBrate: oppBBRate,
       oppPitcherHRrate: oppHrRate,
       parkHrFactor: park.hr,
       parkHFactor: park.h,
-      weatherMult: runTotal.modifiers.find((m) => m.name === 'Weather')?.multiplier ?? 1,
+      parkSoFactor: park.so,
+      umpKZBoost: umpKZ,
+      weatherMult,
     });
   };
 
@@ -310,7 +359,12 @@ export default async function GamePage({ params }: { params: { id: string } }) {
               </>
             )}
           </div>
-          <span className="text-2xs text-ink-faint">Game {gamePk}</span>
+          <span className="text-2xs text-ink-faint flex items-center gap-2">
+            {isPreview && (
+              <Countdown iso={gameData.datetime?.dateTime} status="Preview" prefix="first pitch in " />
+            )}
+            <span>Game {gamePk}</span>
+          </span>
         </div>
 
         <div className="mt-5 grid grid-cols-[1fr_auto_1fr] items-center gap-4">
@@ -476,6 +530,51 @@ export default async function GamePage({ params }: { params: { id: string } }) {
         >
           <LeverageChart data={topLeverage} />
         </Panel>
+
+        {/* Head-to-head series */}
+        <Panel
+          className="lg:col-span-12"
+          title="Head-to-head"
+          subtitle={`${currentSeason} season series · prior season for context`}
+          flush
+        >
+          <H2HPanel
+            games={h2hCurrent}
+            homeId={home.id}
+            awayId={away.id}
+            homeName={home.teamName}
+            awayName={away.teamName}
+            season={currentSeason}
+            priorSeason={h2hPrior.length > 0 ? { games: h2hPrior, season: priorSeason } : undefined}
+          />
+        </Panel>
+
+        {/* Batter-vs-Pitcher career history */}
+        {(awayBvpHomeStarter.length > 0 || homeBvpAwayStarter.length > 0) && (
+          <Panel
+            className="lg:col-span-12"
+            title="Batter vs. starter — career"
+            subtitle="Career line for each batter against today's opposing starter · vsPlayer endpoint"
+            flush
+          >
+            <div className="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-line">
+              {awayBvpHomeStarter.length > 0 && (
+                <BvPMatrix
+                  rows={awayBvpHomeStarter}
+                  pitcherName={homeProbable?.fullName ?? 'Starter'}
+                  teamName={away.teamName}
+                />
+              )}
+              {homeBvpAwayStarter.length > 0 && (
+                <BvPMatrix
+                  rows={homeBvpAwayStarter}
+                  pitcherName={awayProbable?.fullName ?? 'Starter'}
+                  teamName={home.teamName}
+                />
+              )}
+            </div>
+          </Panel>
+        )}
 
         {/* Lineup vs. opposing starter (platoon splits) */}
         {(awayVsHome.length > 0 || homeVsAway.length > 0) && (

@@ -258,11 +258,26 @@ export default function LabPage() {
           <li>Watchlist via browser localStorage</li>
           <li>Injury list per team</li>
           <li>⌘K command palette search across all players & teams</li>
+          <li>Run total + batter & pitcher prop predictors (park/weather/travel/rest aware)</li>
+          <li>Live countdown clocks on every preview game</li>
+          <li>Head-to-head series record + recent meetings (current + prior season)</li>
+          <li>Career batter-vs-starter splits (vsPlayer endpoint)</li>
+          <li>Team month-by-month splits (hitting + pitching)</li>
+          <li>Multi-season percentile profile with side-by-side compare</li>
+          <li>Local-timezone formatting + System/Light/Dark theme toggle</li>
+          <li>Auto-refresh on scoreboard + live games (15s/30s/2m tiered)</li>
         </ul>
       </Panel>
 
       <Panel title="What's intentionally missing (yet)" subtitle="Honest roadmap">
         <ul className="text-sm space-y-2 text-ink-muted list-disc pl-5">
+          <li>
+            <span className="text-ink">Historical weather-conditional team splits.</span> e.g.,
+            "this club's record in 60°F+ games" or "this offense in 15+ mph winds out". MLB Stats
+            API does not aggregate by weather; computing this requires pulling per-game weather
+            for every game over multiple seasons and storing it. Tractable with a Python worker +
+            Postgres — pending the same infra as Statcast.
+          </li>
           <li>
             <span className="text-ink">Statcast (xBA, xSLG, xwOBA, barrel rate, EV, LA).</span> Requires
             pybaseball ingestion job; not bundled because it needs a Python worker + storage.

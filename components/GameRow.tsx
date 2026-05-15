@@ -3,6 +3,7 @@ import { Badge } from './ui/Badge';
 import type { ScheduleGame } from '@/lib/mlb';
 import { teamCapLogoUrl } from '@/lib/mlb';
 import { LocalTime } from './LocalTime';
+import { Countdown } from './Countdown';
 
 export function GameRow({ game }: { game: ScheduleGame }) {
   const state = game.status.abstractGameState; // Preview | Live | Final
@@ -30,7 +31,8 @@ export function GameRow({ game }: { game: ScheduleGame }) {
         <div className="text-right shrink-0 min-w-[88px]">
           {isPreview && (
             <>
-              <LocalTime iso={game.gameDate} format="time" className="text-2xs text-ink-muted stat-num" />
+              <LocalTime iso={game.gameDate} format="time" className="text-2xs text-ink-muted stat-num block" />
+              <Countdown iso={game.gameDate} status="Preview" className="block" />
               {game.venue?.name && (
                 <div className="text-2xs text-ink-faint truncate max-w-[110px]">{game.venue.name}</div>
               )}

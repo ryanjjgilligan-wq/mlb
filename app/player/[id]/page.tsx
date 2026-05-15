@@ -17,6 +17,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { Empty } from '@/components/ui/Empty';
 import { PercentileBar } from '@/components/PercentileBar';
+import { SeasonPercentileProfile } from '@/components/SeasonPercentileProfile';
 import { WatchButton } from '@/components/WatchButton';
 import { RollingChart } from '@/components/RollingChart';
 import { SplitsTable } from '@/components/SplitsTable';
@@ -261,54 +262,16 @@ function HitterView({
         </div>
       </Panel>
 
-      {/* Percentile profile — approximate */}
+      {/* Percentile profile — toggle between current and prior 3 seasons */}
       <Panel
         className="lg:col-span-5"
         title="Profile vs. league"
-        subtitle="Rule-of-thumb percentiles · approximate, replace with cohort-normalized values when ingesting full leaderboards"
+        subtitle="Anchor-based percentiles · toggle prior seasons or compare two side-by-side"
       >
-        <div className="space-y-1">
-          <PercentileBar
-            label="AVG"
-            value={pctFromAnchor(parseFloat(season.avg ?? '0'), [0.200, 0.250, 0.330])}
-            raw={season.avg}
-            hint="Batting average vs. league anchors: .200 (p10), .250 (p50), .330 (p90)"
-          />
-          <PercentileBar
-            label="OBP"
-            value={pctFromAnchor(parseFloat(season.obp ?? '0'), [0.280, 0.320, 0.400])}
-            raw={season.obp}
-          />
-          <PercentileBar
-            label="SLG"
-            value={pctFromAnchor(parseFloat(season.slg ?? '0'), [0.340, 0.400, 0.530])}
-            raw={season.slg}
-          />
-          <PercentileBar
-            label="ISO"
-            value={pctFromAnchor(computedIso, [0.110, 0.160, 0.250])}
-            raw={fmtAvg(computedIso)}
-          />
-          <PercentileBar
-            label="wOBA"
-            value={pctFromAnchor(computedWoba, [0.280, 0.320, 0.390])}
-            raw={fmtAvg(computedWoba)}
-            hint="Weighted On-Base Average — single most predictive top-line offensive number."
-          />
-          <PercentileBar
-            label="BB%"
-            value={pctFromAnchor(computedBb, [0.050, 0.085, 0.140])}
-            raw={fmtPct(computedBb)}
-          />
-          <PercentileBar
-            label="K% (lower is better)"
-            value={100 - pctFromAnchor(computedK, [0.130, 0.220, 0.320])}
-            raw={fmtPct(computedK)}
-          />
-        </div>
-        <p className="text-2xs text-ink-faint mt-3">
-          Approximate league anchors. For exact Savant-style percentiles, ingest cohort distributions per season.
-        </p>
+        <SeasonPercentileProfile
+          isPitcher={false}
+          seasons={buildSeasonOptions(season, careerSplits, 4)}
+        />
       </Panel>
 
       {/* Rolling performance */}
@@ -394,41 +357,12 @@ function PitcherView({
       <Panel
         className="lg:col-span-5"
         title="Profile vs. league"
-        subtitle="Rule-of-thumb percentiles · league anchors"
+        subtitle="Anchor-based percentiles · toggle prior seasons or compare two side-by-side"
       >
-        <div className="space-y-1">
-          <PercentileBar
-            label="ERA (lower is better)"
-            value={100 - pctFromAnchor(parseFloat(season.era ?? '99'), [2.50, 4.00, 5.50])}
-            raw={season.era}
-          />
-          <PercentileBar
-            label="WHIP (lower is better)"
-            value={100 - pctFromAnchor(computedWhip, [1.00, 1.30, 1.55])}
-            raw={fmtNum(computedWhip, 2)}
-          />
-          <PercentileBar
-            label="FIP (lower is better)"
-            value={100 - pctFromAnchor(computedFip, [3.00, 4.10, 5.20])}
-            raw={fmtNum(computedFip, 2)}
-            hint="Fielding-independent ERA estimator"
-          />
-          <PercentileBar
-            label="K/9"
-            value={pctFromAnchor(computedK9, [6.5, 9.0, 12.0])}
-            raw={fmtNum(computedK9, 1)}
-          />
-          <PercentileBar
-            label="BB/9 (lower is better)"
-            value={100 - pctFromAnchor(computedBb9, [1.8, 3.0, 4.5])}
-            raw={fmtNum(computedBb9, 1)}
-          />
-          <PercentileBar
-            label="HR/9 (lower is better)"
-            value={100 - pctFromAnchor(computedHr9, [0.8, 1.2, 1.8])}
-            raw={fmtNum(computedHr9, 2)}
-          />
-        </div>
+        <SeasonPercentileProfile
+          isPitcher={true}
+          seasons={buildSeasonOptions(season, careerSplits, 4)}
+        />
       </Panel>
 
       <Panel
@@ -527,6 +461,25 @@ function ComparablesList({ comparables }: { comparables: ReturnType<typeof findC
       ))}
     </ul>
   );
+}
+
+/**
+ * Build the season options array for SeasonPercentileProfile.
+ * Index 0 is the current season; subsequent entries are most-recent-first
+ * prior seasons drawn from the year-by-year career splits.
+ */
+function buildSeasonOptions(currentSeasonStat: Record<string, any>, careerSplits: any[], max = 4) {
+  const seasonStr = String(new Date().getFullYear());
+  const out: { season: string; stat: Record<string, any>; team?: { name?: string } }[] = [
+    { season: seasonStr, stat: currentSeasonStat },
+  ];
+  // Career splits are typically oldest-first; reverse and skip current season
+  const prior = [...careerSplits].reverse().filter((sp) => String(sp.season) !== seasonStr);
+  for (const sp of prior) {
+    if (out.length >= max) break;
+    out.push({ season: String(sp.season), stat: sp.stat ?? {}, team: sp.team });
+  }
+  return out;
 }
 
 /**

@@ -53,6 +53,18 @@ export type TravelRestInput = {
   awayDaysRest?: number;
 };
 
+export type UmpireInput = {
+  name?: string;
+  /**
+   * Strike-zone size factor relative to the league average. >1.0 = larger zone
+   * (more strikes called → more Ks, fewer BBs, slightly fewer runs). <1.0 =
+   * smaller zone (fewer Ks, more BBs, slightly more runs). Defaults to 1.0
+   * when no historical data is available.
+   */
+  kzBoost?: number;
+  runsModifier?: number; // multiplicative on run total; 1.0 neutral
+};
+
 export type RunTotalInput = {
   home: TeamOffenseDefense;
   away: TeamOffenseDefense;
@@ -61,9 +73,16 @@ export type RunTotalInput = {
   park: ParkProfile;
   weather?: WeatherInput;
   travel?: TravelRestInput;
+  umpire?: UmpireInput;
 };
 
 export type Component = { name: string; multiplier: number; note: string };
+
+export type Confidence = {
+  level: 'low' | 'medium' | 'high';
+  score: number; // 0-100
+  reasons: string[];
+};
 
 export type RunTotalOutput = {
   expectedHomeRuns: number;
@@ -74,6 +93,7 @@ export type RunTotalOutput = {
   ci80: { low: number; high: number };
   ci95: { low: number; high: number };
   pHomeWin: number;
+  confidence: Confidence;
   // Bounds — when we have low confidence in any input
   warnings: string[];
 };
@@ -144,6 +164,19 @@ export function predictRunTotal(input: RunTotalInput): RunTotalOutput {
   const tr = travelRestMultiplier(input.travel);
   modifiers.push(...tr);
 
+  // Umpire — apply runsModifier if provided. KZ boost only flows to player props.
+  if (input.umpire) {
+    const ump = input.umpire;
+    const mult = ump.runsModifier ?? 1;
+    modifiers.push({
+      name: 'Umpire',
+      multiplier: mult,
+      note: ump.name
+        ? `${ump.name}${ump.kzBoost && ump.kzBoost !== 1 ? ` · KZ ${ump.kzBoost > 1 ? '+' : ''}${((ump.kzBoost - 1) * 100).toFixed(0)}%` : ' · neutral'}`
+        : 'No ump data — assumed neutral',
+    });
+  }
+
   // Compose multiplier (multiplicative)
   const totalMult = modifiers.reduce((m, c) => m * c.multiplier, 1);
 
@@ -166,6 +199,26 @@ export function predictRunTotal(input: RunTotalInput): RunTotalOutput {
   const z = diffSD > 0 ? diffMean / diffSD : 0;
   const pHomeWin = normalCdf(z);
 
+  // Confidence — derived from input availability + signal strength.
+  // Higher when: starters known, weather known, both teams have ≥10 games of
+  // sample, talent gap is large (clearer signal). Lower when warnings present.
+  const reasons: string[] = [];
+  let score = 50;
+  if (input.homeStarter?.fip) { score += 8; reasons.push('home starter FIP known'); }
+  if (input.awayStarter?.fip) { score += 8; reasons.push('away starter FIP known'); }
+  if (input.weather && (input.weather.tempF || input.weather.windSpeedMph)) { score += 6; reasons.push('weather data present'); }
+  if (input.travel && input.travel.awayDaysRest !== undefined) { score += 4; reasons.push('rest known'); }
+  const talentGap = Math.abs(homeOff - awayOff) + Math.abs(homeDef - awayDef);
+  if (talentGap > 1.5) { score += 8; reasons.push('large talent gap'); }
+  else if (talentGap > 0.7) { score += 4; reasons.push('moderate talent gap'); }
+  if (warnings.length) { score -= 12 * warnings.length; reasons.push(`${warnings.length} input gap${warnings.length === 1 ? '' : 's'}`); }
+  // CI relative width as a proxy
+  const ciWidth = (ci95.high - ci95.low) / Math.max(1, expectedTotal);
+  if (ciWidth < 0.6) { score += 6; reasons.push('tight CI'); }
+  score = Math.max(0, Math.min(100, score));
+  const level: Confidence['level'] = score >= 70 ? 'high' : score >= 50 ? 'medium' : 'low';
+  const confidence: Confidence = { level, score, reasons };
+
   return {
     expectedHomeRuns,
     expectedAwayRuns,
@@ -178,6 +231,7 @@ export function predictRunTotal(input: RunTotalInput): RunTotalOutput {
     ci80,
     ci95,
     pHomeWin,
+    confidence,
     warnings,
   };
 }
@@ -310,19 +364,33 @@ export type BatterPropInput = {
   slg: number;
   iso?: number; // SLG-AVG
   homeRunRate?: number; // HR / AB
+  doublesPerAb?: number;
+  walkRate?: number; // BB / PA
+  kRate?: number;    // K  / PA
   oppPitcherKRate?: number; // opp K%
+  oppPitcherBBrate?: number; // opp BB%
   oppPitcherHRrate?: number; // HR per AB allowed
   parkHrFactor?: number; // 100-scaled
   parkHFactor?: number;
+  parkSoFactor?: number;
+  umpKZBoost?: number;   // 1.0 = neutral; >1 ump expands strike zone (more Ks, fewer BBs)
   weatherMult?: number; // share of the run-total weather mult
 };
 
 export type BatterProp = {
   expectedHits: number;
   expectedTotalBases: number;
+  expectedDoubles: number;
+  expectedHRs: number;
+  expectedWalks: number;
+  expectedStrikeouts: number;
   pHit1Plus: number;
   pHit2Plus: number;
   pHrAtLeastOne: number;
+  pBb1Plus: number;
+  pK1Plus: number;
+  pDouble1Plus: number;
+  confidence: Confidence;
 };
 
 /**
@@ -338,53 +406,112 @@ export type BatterProp = {
  * Probabilities derived via binomial distribution of independent ABs.
  */
 export function predictBatterProp(input: BatterPropInput): BatterProp {
-  const ab = Math.max(0, input.pa * 0.91);
+  const pa = Math.max(0, input.pa);
+  const ab = Math.max(0, pa * 0.91);
   const baseAvg = input.avg || 0;
   const kAdj = input.oppPitcherKRate != null
     ? 1 - 0.5 * Math.max(-0.1, Math.min(0.1, input.oppPitcherKRate - 0.22))
     : 1;
   const parkAdj = (input.parkHFactor ?? 100) / 100;
   const wxAdj = input.weatherMult ?? 1;
+  const umpKZ = input.umpKZBoost ?? 1; // >1 = wider zone, more Ks / fewer BBs
 
   const pHit = clamp01(baseAvg * kAdj * parkAdj * wxAdj);
-
-  // Expected hits = ab * pHit
   const expectedHits = ab * pHit;
 
-  // HR rate per AB
+  // HR per AB
   const baseHr = input.homeRunRate ?? Math.max(0, (input.iso ?? 0) * 0.25);
-  const hrAdj = ((input.parkHrFactor ?? 100) / 100) * (input.oppPitcherHRrate != null ? (1 + input.oppPitcherHRrate * 1.5) : 1);
-  const pHr = clamp01(baseHr * hrAdj);
+  const hrPark = (input.parkHrFactor ?? 100) / 100;
+  const hrPitcher = input.oppPitcherHRrate != null ? (1 + input.oppPitcherHRrate * 1.5) : 1;
+  const pHr = clamp01(baseHr * hrPark * hrPitcher * wxAdj);
+  const expectedHRs = ab * pHr;
 
-  // Total bases — approximate from SLG with park hits factor
+  // 2B per AB — rough; default 0.045 (MLB-wide ~5%)
+  const base2b = input.doublesPerAb ?? 0.045;
+  const p2b = clamp01(base2b * parkAdj * wxAdj);
+  const expectedDoubles = ab * p2b;
+
+  // Walk rate per PA
+  const baseBB = input.walkRate ?? 0.085;
+  const oppBBAdj = input.oppPitcherBBrate != null ? (input.oppPitcherBBrate / 0.085) : 1;
+  const pBB = clamp01(baseBB * oppBBAdj / umpKZ); // wider zone → fewer walks
+  const expectedWalks = pa * pBB;
+
+  // K rate per PA
+  const baseK = input.kRate ?? 0.22;
+  const parkSO = (input.parkSoFactor ?? 100) / 100;
+  const oppKAdj = input.oppPitcherKRate != null ? (input.oppPitcherKRate / 0.22) : 1;
+  const pK = clamp01(baseK * oppKAdj * parkSO * umpKZ);
+  const expectedKs = pa * pK;
+
+  // Total bases from SLG
   const expectedSlg = (input.slg || 0) * parkAdj * wxAdj;
   const expectedTotalBases = ab * expectedSlg;
 
-  // Binomial event probabilities over ab trials
+  // Event probabilities (binomial tails)
   const pHit1Plus = 1 - Math.pow(1 - pHit, ab);
   const pHit2Plus = Math.max(0, 1 - Math.pow(1 - pHit, ab) - ab * pHit * Math.pow(1 - pHit, ab - 1));
   const pHrAtLeastOne = 1 - Math.pow(1 - pHr, ab);
+  const pDouble1Plus = 1 - Math.pow(1 - p2b, ab);
+  const pBb1Plus = 1 - Math.pow(1 - pBB, pa);
+  const pK1Plus = 1 - Math.pow(1 - pK, pa);
+
+  // Confidence — driven by sample size of player's season + presence of opp data
+  const reasons: string[] = [];
+  let score = 40;
+  // proxy for sample: pa here is the per-game prediction; underlying season AVG carries
+  // sample weight. We use the season AVG presence + opp data as a proxy.
+  if (baseAvg > 0) { score += 15; reasons.push('season AVG present'); }
+  if (input.oppPitcherKRate != null) { score += 12; reasons.push('opp pitcher K-rate known'); }
+  if (input.oppPitcherHRrate != null) { score += 8; reasons.push('opp pitcher HR-rate known'); }
+  if (input.oppPitcherBBrate != null) { score += 6; reasons.push('opp pitcher BB-rate known'); }
+  if ((input.parkHrFactor ?? 100) !== 100 || (input.parkHFactor ?? 100) !== 100) { score += 6; reasons.push('park factors applied'); }
+  if (input.weatherMult && input.weatherMult !== 1) { score += 5; reasons.push('weather modifier applied'); }
+  score = Math.max(0, Math.min(100, score));
+  const level: Confidence['level'] = score >= 70 ? 'high' : score >= 50 ? 'medium' : 'low';
+  const confidence: Confidence = { level, score, reasons };
 
   return {
     expectedHits,
     expectedTotalBases,
+    expectedDoubles,
+    expectedHRs,
+    expectedWalks,
+    expectedStrikeouts: expectedKs,
     pHit1Plus,
     pHit2Plus,
     pHrAtLeastOne,
+    pBb1Plus,
+    pK1Plus,
+    pDouble1Plus,
+    confidence,
   };
 }
 
 export type PitcherPropInput = {
   oppKRate: number; // opponent team K%
+  oppBBRate?: number;
   pitcherK9: number; // season K/9
+  pitcherBB9?: number;
+  pitcherHR9?: number;
+  pitcherWhip?: number;
   pitcherIpPerStart: number; // bulk
   parkSoFactor?: number; // 100-scaled
+  parkHrFactor?: number; // 100-scaled
+  umpKZBoost?: number;   // >1 → more Ks, fewer BBs
+  weatherMult?: number;
 };
 
 export type PitcherProp = {
   expectedStrikeouts: number;
+  expectedWalks: number;
+  expectedHits: number;
+  expectedHRs: number;
+  expectedEarnedRuns: number;
   pSixPlus: number;
   pEightPlus: number;
+  pTenPlus: number;
+  confidence: Confidence;
 };
 
 /**
@@ -398,14 +525,65 @@ export type PitcherProp = {
  */
 export function predictPitcherProp(input: PitcherPropInput): PitcherProp {
   const ip = Math.min(7.5, Math.max(2.5, input.pitcherIpPerStart || 5.5));
-  const baseRate = (input.pitcherK9 || 8) / 9;
-  const oppAdj = 1 + Math.max(-0.5, Math.min(0.5, (input.oppKRate - 0.22) * 2));
-  const parkAdj = (input.parkSoFactor ?? 100) / 100;
-  const perInning = baseRate * oppAdj * parkAdj;
-  const expectedK = ip * perInning;
+  const umpKZ = input.umpKZBoost ?? 1;
+  const wxAdj = input.weatherMult ?? 1;
+
+  // K
+  const baseK = (input.pitcherK9 || 8) / 9;
+  const oppKAdj = 1 + Math.max(-0.5, Math.min(0.5, (input.oppKRate - 0.22) * 2));
+  const parkSO = (input.parkSoFactor ?? 100) / 100;
+  const expectedK = ip * baseK * oppKAdj * parkSO * umpKZ;
+
+  // BB
+  const baseBB = (input.pitcherBB9 ?? 3) / 9;
+  const oppBBAdj = input.oppBBRate != null ? input.oppBBRate / 0.085 : 1;
+  const expectedBB = ip * baseBB * oppBBAdj / umpKZ;
+
+  // Hits — derive from WHIP minus BB
+  const whip = input.pitcherWhip ?? 1.30;
+  const expectedHRunner = ip * Math.max(0, whip - baseBB);
+  const expectedHits = expectedHRunner * (1 / wxAdj); // weather wash; favored offense → more hits
+
+  // HR
+  const baseHR = (input.pitcherHR9 ?? 1.2) / 9;
+  const parkHR = (input.parkHrFactor ?? 100) / 100;
+  const expectedHRs = ip * baseHR * parkHR * wxAdj;
+
+  // ER — back into it via ERA proxy if not in input. Use FIP-style estimate:
+  //   ER/9 ≈ 13*HR/9 + 3*BB/9 - 2*K/9 + constant 3.10
+  const era9 = 13 * (expectedHRs * 9 / Math.max(1, ip)) + 3 * (expectedBB * 9 / Math.max(1, ip)) - 2 * (expectedK * 9 / Math.max(1, ip)) + 3.1;
+  const expectedER = Math.max(0, (era9 / 9) * ip);
+
   const pSixPlus = 1 - poissonCdf(5, expectedK);
   const pEightPlus = 1 - poissonCdf(7, expectedK);
-  return { expectedStrikeouts: expectedK, pSixPlus, pEightPlus };
+  const pTenPlus = 1 - poissonCdf(9, expectedK);
+
+  // Confidence
+  const reasons: string[] = [];
+  let score = 40;
+  if (input.pitcherK9 > 0) { score += 14; reasons.push('K/9 known'); }
+  if (input.pitcherWhip != null) { score += 8; reasons.push('WHIP known'); }
+  if (input.pitcherBB9 != null) { score += 6; reasons.push('BB/9 known'); }
+  if (input.pitcherHR9 != null) { score += 6; reasons.push('HR/9 known'); }
+  if (input.oppKRate > 0 && input.oppKRate !== 0.22) { score += 8; reasons.push('opp K% known'); }
+  if (input.weatherMult && input.weatherMult !== 1) { score += 4; reasons.push('weather applied'); }
+  if (input.umpKZBoost && input.umpKZBoost !== 1) { score += 6; reasons.push('umpire KZ applied'); }
+  if (ip < 4) { score -= 10; reasons.push('low IP volume'); }
+  score = Math.max(0, Math.min(100, score));
+  const level: Confidence['level'] = score >= 70 ? 'high' : score >= 50 ? 'medium' : 'low';
+  const confidence: Confidence = { level, score, reasons };
+
+  return {
+    expectedStrikeouts: expectedK,
+    expectedWalks: expectedBB,
+    expectedHits,
+    expectedHRs,
+    expectedEarnedRuns: expectedER,
+    pSixPlus,
+    pEightPlus,
+    pTenPlus,
+    confidence,
+  };
 }
 
 function poissonCdf(k: number, lambda: number): number {

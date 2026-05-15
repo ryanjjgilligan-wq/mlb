@@ -8,9 +8,12 @@ import {
   getScheduleRange,
   getRemainingSchedule,
   getInjuryList,
+  getTeamMonthlyHitting,
+  getTeamMonthlyPitching,
   teamCapLogoUrl,
   playerHeadshotUrl,
 } from '@/lib/mlb';
+import { Countdown } from '@/components/Countdown';
 import { Panel } from '@/components/ui/Panel';
 import { Stat } from '@/components/ui/Stat';
 import { Badge } from '@/components/ui/Badge';
@@ -44,7 +47,7 @@ export default async function TeamPage({ params }: { params: { id: string } }) {
   const start = shiftYmd(today, -3);
   const end = shiftYmd(today, 10);
 
-  const [team, roster, stats, standings, scheduleRange, remainingSchedule, injuries] = await Promise.all([
+  const [team, roster, stats, standings, scheduleRange, remainingSchedule, injuries, monthlyHit, monthlyPit] = await Promise.all([
     getTeam(id),
     getRoster(id).catch(() => []),
     getTeamStats(id).catch(() => []),
@@ -52,6 +55,8 @@ export default async function TeamPage({ params }: { params: { id: string } }) {
     getScheduleRange(start, end).catch(() => []),
     getRemainingSchedule(id).catch(() => []),
     getInjuryList(id).catch(() => []),
+    getTeamMonthlyHitting(id).catch(() => []),
+    getTeamMonthlyPitching(id).catch(() => []),
   ]);
 
   if (!team) notFound();
@@ -196,6 +201,21 @@ export default async function TeamPage({ params }: { params: { id: string } }) {
           </div>
         </Panel>
 
+        {/* Monthly splits — by-month for hitting and pitching */}
+        {(monthlyHit.length > 0 || monthlyPit.length > 0) && (
+          <Panel
+            className="lg:col-span-12"
+            title="Month-by-month"
+            subtitle="Team hitting + pitching split by calendar month · MLB byMonth endpoint"
+            flush
+          >
+            <div className="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-line">
+              <MonthlyTable splits={monthlyHit} kind="hitting" />
+              <MonthlyTable splits={monthlyPit} kind="pitching" />
+            </div>
+          </Panel>
+        )}
+
         {/* Monte Carlo final-record sim */}
         <Panel
           className="lg:col-span-12"
@@ -277,7 +297,10 @@ export default async function TeamPage({ params }: { params: { id: string } }) {
                       ) : state === 'Live' ? (
                         <Badge variant="neg" pulse>LIVE</Badge>
                       ) : (
-                        <LocalTime iso={g.gameDate} format="time" className="text-2xs text-ink-muted stat-num" />
+                        <div className="flex flex-col items-end">
+                          <LocalTime iso={g.gameDate} format="time" className="text-2xs text-ink-muted stat-num" />
+                          <Countdown iso={g.gameDate} status="Preview" />
+                        </div>
                       )}
                     </Link>
                   </li>
@@ -322,6 +345,82 @@ export default async function TeamPage({ params }: { params: { id: string } }) {
           )}
         </Panel>
       </div>
+    </div>
+  );
+}
+
+function MonthlyTable({ splits, kind }: { splits: any[]; kind: 'hitting' | 'pitching' }) {
+  const monthName = (m: number) => ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][m - 1] ?? String(m);
+  if (!splits.length) {
+    return (
+      <div className="p-4 text-2xs text-ink-faint text-center">
+        No monthly {kind} splits yet this season.
+      </div>
+    );
+  }
+  return (
+    <div className="p-3">
+      <div className="label-micro mb-2 px-1 capitalize">{kind}</div>
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-2xs uppercase tracking-micro text-ink-muted border-b border-line">
+            <th className="text-left font-medium pb-1">Month</th>
+            <th className="text-right font-medium pb-1">G</th>
+            {kind === 'hitting' ? (
+              <>
+                <th className="text-right font-medium pb-1">PA</th>
+                <th className="text-right font-medium pb-1">R</th>
+                <th className="text-right font-medium pb-1">HR</th>
+                <th className="text-right font-medium pb-1">AVG</th>
+                <th className="text-right font-medium pb-1">OBP</th>
+                <th className="text-right font-medium pb-1">SLG</th>
+                <th className="text-right font-medium pb-1">OPS</th>
+              </>
+            ) : (
+              <>
+                <th className="text-right font-medium pb-1">IP</th>
+                <th className="text-right font-medium pb-1">ERA</th>
+                <th className="text-right font-medium pb-1">WHIP</th>
+                <th className="text-right font-medium pb-1">K/9</th>
+                <th className="text-right font-medium pb-1">BB/9</th>
+                <th className="text-right font-medium pb-1">OAV</th>
+              </>
+            )}
+          </tr>
+        </thead>
+        <tbody>
+          {splits.map((sp: any, i: number) => {
+            const s = sp.stat ?? {};
+            const m = sp.month ?? sp.numTeams ?? i + 3;
+            return (
+              <tr key={i} className="row-hover border-t border-line-subtle">
+                <td className="py-1 pr-2 stat-num text-ink">{monthName(Number(m))}</td>
+                <td className="text-right stat-num text-ink-muted">{s.gamesPlayed ?? '—'}</td>
+                {kind === 'hitting' ? (
+                  <>
+                    <td className="text-right stat-num text-ink-muted">{s.plateAppearances ?? '—'}</td>
+                    <td className="text-right stat-num text-ink-muted">{s.runs ?? '—'}</td>
+                    <td className="text-right stat-num text-ink-muted">{s.homeRuns ?? '—'}</td>
+                    <td className="text-right stat-num text-ink-muted">{s.avg ?? '—'}</td>
+                    <td className="text-right stat-num text-ink-muted">{s.obp ?? '—'}</td>
+                    <td className="text-right stat-num text-ink-muted">{s.slg ?? '—'}</td>
+                    <td className="text-right stat-num text-ink">{s.ops ?? '—'}</td>
+                  </>
+                ) : (
+                  <>
+                    <td className="text-right stat-num text-ink-muted">{s.inningsPitched ?? '—'}</td>
+                    <td className="text-right stat-num text-ink">{s.era ?? '—'}</td>
+                    <td className="text-right stat-num text-ink-muted">{s.whip ?? '—'}</td>
+                    <td className="text-right stat-num text-ink-muted">{s.strikeoutsPer9Inn ?? '—'}</td>
+                    <td className="text-right stat-num text-ink-muted">{s.walksPer9Inn ?? '—'}</td>
+                    <td className="text-right stat-num text-ink-muted">{s.avg ?? '—'}</td>
+                  </>
+                )}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }
