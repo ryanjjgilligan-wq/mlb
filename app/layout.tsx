@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from 'next';
 import { Inter, JetBrains_Mono } from 'next/font/google';
+import Script from 'next/script';
 import { Nav } from '@/components/Nav';
 import './globals.css';
 
@@ -32,10 +33,10 @@ try {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`${inter.variable} ${mono.variable} dark`} suppressHydrationWarning>
-      <head>
-        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
-      </head>
       <body className="min-h-screen flex flex-col antialiased">
+        <Script id="diamondiq-theme-init" strategy="beforeInteractive">
+          {themeScript}
+        </Script>
         <Nav />
         <main className="flex-1">{children}</main>
         <footer className="border-t border-line mt-auto">
