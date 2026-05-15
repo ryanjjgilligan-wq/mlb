@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/cn';
-import { Activity, BarChart3, Users, BookOpenCheck, Search, Star, Radio, Sparkles, Hourglass, GitCompare, Shield } from 'lucide-react';
+import { Activity, BarChart3, Users, BookOpenCheck, Search, Star, Radio, Sparkles, Hourglass, GitCompare, Shield, Award } from 'lucide-react';
 import { SearchCommand } from './SearchCommand';
 import { LiveDot } from './LiveDot';
 import { ThemeToggle } from './ThemeToggle';
@@ -15,6 +15,7 @@ const nav = [
   { href: '/first5', label: 'First 5', icon: Hourglass },
   { href: '/nrfi', label: 'NRFI', icon: Shield },
   { href: '/compare', label: 'Compare', icon: GitCompare },
+  { href: '/track-record', label: 'Track Record', icon: Award },
   { href: '/teams', label: 'Teams', icon: Users },
   { href: '/standings', label: 'Standings', icon: BarChart3 },
   { href: '/watchlist', label: 'Watchlist', icon: Star },
