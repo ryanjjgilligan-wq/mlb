@@ -22,6 +22,11 @@ import { LivePropTracker, type LivePropRow } from '@/components/LivePropTracker'
 import { LiveGameField, type LiveFieldData } from '@/components/LiveGameField';
 import { LivePitchSequence, type LivePitchEvent } from '@/components/LivePitchSequence';
 import { LiveInningStrip } from '@/components/LiveInningStrip';
+import { LiveMatchupCard } from '@/components/LiveMatchupCard';
+import { GameInfoCard } from '@/components/GameInfoCard';
+import { TeamStatsCompare } from '@/components/TeamStatsCompare';
+import { ScoringSummary } from '@/components/ScoringSummary';
+import { LastPlayCard } from '@/components/LastPlayCard';
 import type { LiveGameState } from '@/lib/liveAdjust';
 import { H2HPanel } from '@/components/H2HPanel';
 import { BvPMatrix } from '@/components/BvPMatrix';
@@ -445,9 +450,83 @@ export default async function GamePage({ params }: { params: { id: string } }) {
         </div>
       </div>
 
+      {/* Game Information — always shown */}
+      <Panel title="Game Information" subtitle="Venue · time · weather · umpire crew">
+        <GameInfoCard
+          d={{
+            venueId: gameData.venue?.id,
+            venueName: gameData.venue?.name,
+            venueCity: gameData.venue?.location?.city,
+            venueState: gameData.venue?.location?.stateAbbrev || gameData.venue?.location?.state,
+            gameDate: gameData.datetime?.dateTime ?? gameData.datetime?.officialDate ?? new Date().toISOString(),
+            broadcastNote: (() => {
+              const bc = liveData?.boxscore?.info?.find((i: any) => /tv|coverage/i.test(i.label ?? ''));
+              return bc?.value;
+            })(),
+            weather: gameData.weather,
+            umpires: ((boxscore?.officials ?? []) as any[])
+              .map((o) => ({ type: o.officialType ?? 'Umpire', name: o.official?.fullName ?? '—' })),
+          }}
+        />
+      </Panel>
+
       {/* Live cockpit — only renders when game is in progress */}
       {isLive && linescore && (
         <>
+          {/* Pitcher vs Batter matchup card — broadcast-style */}
+          {(() => {
+            const pitcher = linescore.defense?.pitcher;
+            const batter = linescore.offense?.batter;
+            const onDeck = linescore.offense?.onDeck;
+            const pitchingTeamSide = linescore.isTopInning ? 'home' : 'away';
+            const battingTeamSide = linescore.isTopInning ? 'away' : 'home';
+            const pitchingTeamId = pitchingTeamSide === 'home' ? home.id : away.id;
+            const battingTeamId = battingTeamSide === 'home' ? home.id : away.id;
+            const pitcherStats = pitcher ? boxscore?.teams?.[pitchingTeamSide]?.players?.[`ID${pitcher.id}`]?.stats?.pitching : undefined;
+            const batterPlayer = batter ? boxscore?.teams?.[battingTeamSide]?.players?.[`ID${batter.id}`] : undefined;
+            const batterStats = batterPlayer?.stats?.batting;
+            const batterPos = batterPlayer?.position?.abbreviation;
+            return (
+              <Panel
+                title={
+                  <span className="flex items-center gap-2">
+                    Matchup
+                    <Badge variant="neg" pulse>LIVE</Badge>
+                  </span>
+                }
+                subtitle="Current pitcher vs current batter · this-AB stats · refreshes every 5s"
+                flush
+              >
+                <LiveMatchupCard
+                  d={{
+                    pitcher: pitcher ? {
+                      id: pitcher.id,
+                      name: pitcher.fullName,
+                      teamId: pitchingTeamId,
+                      throws: pitcher.pitchHand?.code,
+                      inningsPitched: pitcherStats?.inningsPitched,
+                      hits: pitcherStats?.hits,
+                      earnedRuns: pitcherStats?.earnedRuns,
+                      strikeOuts: pitcherStats?.strikeOuts,
+                      baseOnBalls: pitcherStats?.baseOnBalls,
+                      numberOfPitches: pitcherStats?.numberOfPitches,
+                    } : undefined,
+                    batter: batter ? {
+                      id: batter.id,
+                      name: batter.fullName,
+                      teamId: battingTeamId,
+                      position: batterPos,
+                      bats: batter.batSide?.code,
+                      atBats: batterStats?.atBats,
+                      hits: batterStats?.hits,
+                    } : undefined,
+                    onDeck: onDeck ? { id: onDeck.id, name: onDeck.fullName } : undefined,
+                  }}
+                />
+              </Panel>
+            );
+          })()}
+
           {/* The big visual field */}
           <Panel
             title={
@@ -550,8 +629,15 @@ export default async function GamePage({ params }: { params: { id: string } }) {
                 <LivePitchSequence
                   pitches={pitches}
                   count={{ balls: linescore.balls ?? 0, strikes: linescore.strikes ?? 0 }}
+                  outs={linescore.outs ?? 0}
                   batterName={linescore.offense?.batter?.fullName}
                   pitcherName={linescore.defense?.pitcher?.fullName}
+                  batterBats={linescore.offense?.batter?.batSide?.code}
+                  bases={{
+                    first: linescore.offense?.first ? { name: linescore.offense.first.fullName } : undefined,
+                    second: linescore.offense?.second ? { name: linescore.offense.second.fullName } : undefined,
+                    third: linescore.offense?.third ? { name: linescore.offense.third.fullName } : undefined,
+                  }}
                 />
               </Panel>
             );
@@ -636,6 +722,28 @@ export default async function GamePage({ params }: { params: { id: string } }) {
             preGameHomeWP={runTotal.pHomeWin}
             isLive={isLive}
           />
+
+          {/* Last play card — broadcast-style under the chart */}
+          {(isLive || isFinal) && wpPoints.length > 0 && (() => {
+            const lastWP = wpPoints[wpPoints.length - 1];
+            const cp = liveData?.plays?.currentPlay;
+            const allPlays = liveData?.plays?.allPlays ?? [];
+            const lastPlay = allPlays[allPlays.length - 1] ?? cp;
+            return (
+              <div className="mt-3">
+                <LastPlayCard
+                  d={{
+                    away: { id: away.id, abbr: gameData.teams?.away?.abbreviation ?? away.teamName, runs: linescore?.teams?.away?.runs ?? 0 },
+                    home: { id: home.id, abbr: gameData.teams?.home?.abbreviation ?? home.teamName, runs: linescore?.teams?.home?.runs ?? 0 },
+                    homeWP: lastWP?.homeWP,
+                    description: lastPlay?.result?.description,
+                    halfInning: lastPlay?.about?.halfInning === 'top' ? 'top' : 'bottom',
+                    inning: lastPlay?.about?.inning,
+                  }}
+                />
+              </div>
+            );
+          })()}
         </Panel>
 
         {/* Run total predictor — full transparency on inputs */}
@@ -1041,44 +1149,69 @@ export default async function GamePage({ params }: { params: { id: string } }) {
           </Panel>
         )}
 
-        {/* Linescore */}
+        {/* Scoring Summary — polished line score with R/H/E + scoring plays */}
         {innings.length > 0 && (
-          <Panel className="lg:col-span-12" title="Line score" flush>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-2xs uppercase tracking-micro text-ink-muted border-b border-line">
-                    <th className="text-left font-medium px-3 py-2">Team</th>
-                    {innings.map((inn: any) => (
-                      <th key={inn.num} className="text-center font-medium px-2 py-2 w-8 stat-num">
-                        {inn.num}
-                      </th>
-                    ))}
-                    <th className="text-center font-medium px-3 py-2 w-10">R</th>
-                    <th className="text-center font-medium px-3 py-2 w-10">H</th>
-                    <th className="text-center font-medium px-3 py-2 w-10">E</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <LinescoreRow
-                    team={away.teamName}
-                    teamId={away.id}
-                    innings={innings.map((i: any) => i.away?.runs)}
-                    r={linescore?.teams?.away?.runs}
-                    h={linescore?.teams?.away?.hits}
-                    e={linescore?.teams?.away?.errors}
-                  />
-                  <LinescoreRow
-                    team={home.teamName}
-                    teamId={home.id}
-                    innings={innings.map((i: any) => i.home?.runs)}
-                    r={linescore?.teams?.home?.runs}
-                    h={linescore?.teams?.home?.hits}
-                    e={linescore?.teams?.home?.errors}
-                  />
-                </tbody>
-              </table>
-            </div>
+          <Panel className="lg:col-span-12" title="Scoring Summary" flush>
+            <ScoringSummary
+              data={{
+                away: { id: away.id, abbr: gameData.teams?.away?.abbreviation ?? away.teamName, name: away.teamName },
+                home: { id: home.id, abbr: gameData.teams?.home?.abbreviation ?? home.teamName, name: home.teamName },
+                innings: innings.map((i: any) => ({
+                  num: i.num,
+                  away: { runs: i.away?.runs },
+                  home: { runs: i.home?.runs },
+                })),
+                totals: {
+                  away: {
+                    runs: linescore?.teams?.away?.runs ?? 0,
+                    hits: linescore?.teams?.away?.hits ?? 0,
+                    errors: linescore?.teams?.away?.errors ?? 0,
+                  },
+                  home: {
+                    runs: linescore?.teams?.home?.runs ?? 0,
+                    hits: linescore?.teams?.home?.hits ?? 0,
+                    errors: linescore?.teams?.home?.errors ?? 0,
+                  },
+                },
+                scoringPlays: (() => {
+                  const allPlays = liveData?.plays?.allPlays ?? [];
+                  const idx = liveData?.plays?.scoringPlays ?? [];
+                  return idx
+                    .map((i: number) => allPlays[i])
+                    .filter(Boolean)
+                    .map((p: any) => ({
+                      inning: p.about?.inning ?? 0,
+                      halfInning: p.about?.halfInning === 'top' ? 'top' : 'bottom',
+                      description: p.result?.description ?? '',
+                      awayScore: p.result?.awayScore ?? 0,
+                      homeScore: p.result?.homeScore ?? 0,
+                    }));
+                })(),
+                currentInning: linescore?.currentInning,
+              }}
+            />
+          </Panel>
+        )}
+
+        {/* Team stats compare — Hitting / Pitching tab */}
+        {boxscore?.teams && !isPreview && (
+          <Panel className="lg:col-span-12" title="Team comparison" subtitle="Side-by-side hitting + pitching · click tabs to switch" flush>
+            <TeamStatsCompare
+              data={{
+                away: {
+                  id: away.id,
+                  abbr: gameData.teams?.away?.abbreviation ?? away.teamName,
+                  name: away.teamName,
+                  teamStats: boxscore.teams.away?.teamStats,
+                },
+                home: {
+                  id: home.id,
+                  abbr: gameData.teams?.home?.abbreviation ?? home.teamName,
+                  name: home.teamName,
+                  teamStats: boxscore.teams.home?.teamStats,
+                },
+              }}
+            />
           </Panel>
         )}
 

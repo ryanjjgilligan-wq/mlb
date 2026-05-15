@@ -22,11 +22,24 @@ export type LivePitchEvent = {
 export type LivePitchSequenceProps = {
   pitches: LivePitchEvent[];
   count: { balls: number; strikes: number };
+  outs?: number;
   batterName?: string;
   pitcherName?: string;
+  /** L = lefty batter, R = righty. Drives silhouette orientation. */
+  batterBats?: string;
+  /** Base occupancy for the "ON BASE" row. */
+  bases?: { first?: { name: string }; second?: { name: string }; third?: { name: string } };
 };
 
-export function LivePitchSequence({ pitches, count, batterName, pitcherName }: LivePitchSequenceProps) {
+export function LivePitchSequence({
+  pitches,
+  count,
+  outs = 0,
+  batterName,
+  pitcherName,
+  batterBats,
+  bases,
+}: LivePitchSequenceProps) {
   if (!pitches.length) {
     return (
       <div className="px-4 py-6 text-2xs text-ink-faint text-center">
@@ -35,44 +48,143 @@ export function LivePitchSequence({ pitches, count, batterName, pitcherName }: L
     );
   }
   return (
-    <div className="grid grid-cols-1 md:grid-cols-[260px_1fr] gap-6 items-start p-4">
-      {/* Strike zone */}
-      <div>
-        <div className="label-micro mb-2">Pitch locations · this AB</div>
-        <StrikeZone pitches={pitches} />
-        <div className="text-2xs text-ink-faint mt-1.5 text-center">
-          catcher's view · count <span className="stat-num text-ink-muted">{count.balls}-{count.strikes}</span> · last pitch glows
+    <div className="px-4 py-4 space-y-3">
+      {/* Top header strip — Balls / Strikes / Outs as pixel dots */}
+      <div className="grid grid-cols-3 gap-4">
+        <CountStrip label="Balls" current={count.balls} max={4} color="#16a34a" />
+        <CountStrip label="Strikes" current={count.strikes} max={3} color="#dc2626" />
+        <CountStrip label="Outs" current={outs} max={3} color="#525252" />
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-[1fr_320px] gap-4 items-start">
+        {/* Strike zone with batter silhouette */}
+        <div>
+          <div className="flex items-end gap-2">
+            {batterBats !== 'L' && <BatterSilhouette side="left" />}
+            <StrikeZone pitches={pitches} />
+            {batterBats === 'L' && <BatterSilhouette side="right" />}
+          </div>
+          <div className="text-2xs text-ink-faint mt-1.5 text-center">
+            catcher's view · last pitch glows
+          </div>
+        </div>
+
+        {/* Pitch log */}
+        <div>
+          <div className="label-micro mb-1.5">{batterName ? `${batterName} ` : ''}vs {pitcherName ?? ''}</div>
+          <div className="space-y-1.5">
+            {[...pitches].reverse().map((p) => (
+              <PitchRow key={p.index} p={p} />
+            ))}
+          </div>
         </div>
       </div>
 
-      {/* Pitch log */}
-      <div>
-        <div className="label-micro mb-1.5">{batterName} vs {pitcherName}</div>
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-2xs uppercase tracking-micro text-ink-muted border-b border-line">
-              <th className="text-left font-medium pb-1 w-6">#</th>
-              <th className="text-left font-medium pb-1">Pitch</th>
-              <th className="text-right font-medium pb-1">MPH</th>
-              <th className="text-left font-medium pb-1 pl-3">Result</th>
-            </tr>
-          </thead>
-          <tbody>
-            {pitches.map((p) => (
-              <tr key={p.index} className="border-t border-line-subtle">
-                <td className="py-1 stat-num text-ink-faint">{p.index + 1}</td>
-                <td className="py-1 truncate">{p.pitchTypeName ?? p.pitchType ?? '—'}</td>
-                <td className="py-1 text-right stat-num text-ink-muted">{p.startSpeed ? p.startSpeed.toFixed(1) : '—'}</td>
-                <td className="py-1 pl-3">
-                  <span className={`text-2xs px-1.5 py-0.5 rounded ${resultClass(p)}`}>
-                    {p.description ?? p.call ?? '—'}
-                  </span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      {/* On-base footer */}
+      {bases && (
+        <div className="pt-3 border-t border-line-subtle flex items-center gap-3 text-2xs">
+          <BaseDiamond
+            first={!!bases.first}
+            second={!!bases.second}
+            third={!!bases.third}
+          />
+          <span className="label-micro">On base</span>
+          <span className="text-ink-muted truncate">
+            {bases.first ? <><strong className="text-ink stat-num">1B:</strong> {bases.first.name}</> : <span className="text-ink-faint">1B: empty</span>}
+            <span className="px-2 text-ink-faint">·</span>
+            {bases.second ? <><strong className="text-ink stat-num">2B:</strong> {bases.second.name}</> : <span className="text-ink-faint">2B: empty</span>}
+            <span className="px-2 text-ink-faint">·</span>
+            {bases.third ? <><strong className="text-ink stat-num">3B:</strong> {bases.third.name}</> : <span className="text-ink-faint">3B: empty</span>}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CountStrip({ label, current, max, color }: { label: string; current: number; max: number; color: string }) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="label-micro">{label}</span>
+      <div className="flex items-center gap-1.5">
+        {Array.from({ length: max }).map((_, i) => (
+          <span
+            key={i}
+            className="w-2.5 h-2.5 rounded-full transition-colors"
+            style={{
+              background: i < current ? color : 'transparent',
+              border: i < current ? `1px solid ${color}` : '1px solid var(--line-strong)',
+            }}
+          />
+        ))}
       </div>
+    </div>
+  );
+}
+
+function BatterSilhouette({ side }: { side: 'left' | 'right' }) {
+  // Stylized batter standing in the box, viewed from the catcher
+  const flip = side === 'right' ? -1 : 1;
+  return (
+    <svg width="60" height="240" viewBox="0 0 60 240" className="shrink-0 hidden md:block">
+      <g transform={`scale(${flip} 1) translate(${flip < 0 ? -60 : 0} 0)`} fill="var(--ink-muted)" opacity="0.55">
+        {/* Helmet */}
+        <ellipse cx="32" cy="38" rx="11" ry="13" />
+        <rect x="22" y="36" width="16" height="6" />
+        {/* Torso */}
+        <path d="M 22 50 Q 30 48 38 50 L 42 90 Q 30 88 18 92 Z" />
+        {/* Front leg */}
+        <path d="M 22 92 L 18 145 L 22 175 L 30 175 L 30 145 L 28 95 Z" />
+        {/* Back leg */}
+        <path d="M 38 90 L 44 145 L 40 175 L 32 175 L 32 145 L 34 92 Z" />
+        {/* Arms holding bat */}
+        <path d="M 38 56 L 50 50 L 52 53 L 42 60 Z" />
+        {/* Bat */}
+        <line x1="50" y1="48" x2="14" y2="8" stroke="var(--ink-muted)" strokeWidth="2.5" strokeLinecap="round" />
+        <circle cx="14" cy="8" r="2.5" fill="var(--ink-muted)" />
+      </g>
+    </svg>
+  );
+}
+
+function BaseDiamond({ first, second, third }: { first: boolean; second: boolean; third: boolean }) {
+  return (
+    <svg width="22" height="22" viewBox="0 0 22 22">
+      <g transform="translate(11 11) rotate(45) translate(-3.5 -3.5)">
+        <rect x="6" y="-6" width="6" height="6" fill={first ? 'var(--accent)' : 'none'} stroke="var(--line-strong)" strokeWidth="0.8" />
+        <rect x="0" y="-12" width="6" height="6" fill={second ? 'var(--accent)' : 'none'} stroke="var(--line-strong)" strokeWidth="0.8" />
+        <rect x="-6" y="-6" width="6" height="6" fill={third ? 'var(--accent)' : 'none'} stroke="var(--line-strong)" strokeWidth="0.8" />
+      </g>
+    </svg>
+  );
+}
+
+function PitchRow({ p }: { p: LivePitchEvent }) {
+  const isBall = (p.description ?? '').toLowerCase().includes('ball');
+  const isFoul = (p.description ?? '').toLowerCase().includes('foul');
+  const isInPlay = p.isInPlay;
+  const isStrike = !isBall && !isFoul && !isInPlay;
+  const dotColor = pitchColor(p);
+  return (
+    <div className="flex items-center gap-3 p-2 rounded border border-line bg-bg-raised">
+      <div
+        className="w-7 h-7 rounded-full flex items-center justify-center stat-num text-xs font-bold shrink-0"
+        style={{ background: dotColor, color: '#0a0a0b' }}
+      >
+        {p.index + 1}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="text-2xs uppercase tracking-micro font-semibold text-ink truncate">
+          {p.description ?? p.call ?? '—'}
+        </div>
+        <div className="text-2xs text-ink-muted truncate">{p.pitchTypeName ?? p.pitchType ?? '—'}</div>
+      </div>
+      {p.startSpeed !== undefined && (
+        <div className="text-right shrink-0">
+          <div className="stat-num text-sm font-semibold text-ink">{p.startSpeed.toFixed(0)}</div>
+          <div className="text-2xs text-ink-faint">MPH</div>
+        </div>
+      )}
     </div>
   );
 }
