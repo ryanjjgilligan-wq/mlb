@@ -14,6 +14,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Empty } from '@/components/ui/Empty';
 import { WinProbChart, type WPPoint } from '@/components/WinProbChart';
 import { LeverageChart, type LeveragePoint } from '@/components/LeverageChart';
+import { AutoRefresh } from '@/components/AutoRefresh';
 import { pythagorean, fmtAvg } from '@/lib/saber';
 import { preGameHomeWP } from '@/lib/winprob';
 import { formatGameTime } from '@/lib/time';
@@ -127,6 +128,18 @@ export default async function GamePage({ params }: { params: { id: string } }) {
             </span>
             <span className="text-2xs text-ink-faint">·</span>
             <span className="text-2xs text-ink-muted">{gameData.venue?.name}</span>
+            {isLive && (
+              <>
+                <span className="text-2xs text-ink-faint">·</span>
+                <AutoRefresh intervalMs={15_000} label="auto-refresh 15s" />
+              </>
+            )}
+            {isPreview && (
+              <>
+                <span className="text-2xs text-ink-faint">·</span>
+                <AutoRefresh intervalMs={300_000} label="auto-refresh 5m" />
+              </>
+            )}
           </div>
           <span className="text-2xs text-ink-faint">Game {gamePk}</span>
         </div>

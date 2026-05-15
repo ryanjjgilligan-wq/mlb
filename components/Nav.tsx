@@ -50,9 +50,6 @@ export function Nav() {
         </nav>
         <div className="ml-auto flex items-center gap-3">
           <SearchCommand />
-          <span className="hidden md:inline text-2xs text-ink-faint">
-            <span className="text-signal-pos">●</span> live
-          </span>
         </div>
       </div>
     </header>

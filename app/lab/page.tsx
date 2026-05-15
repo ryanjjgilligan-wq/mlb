@@ -122,7 +122,15 @@ export default function LabPage() {
         />
       </Panel>
 
-      <Panel title="Data freshness" subtitle="Cache windows per endpoint">
+      <Panel title="Data freshness" subtitle="Server cache windows + client auto-refresh">
+        <p className="text-2xs text-ink-muted mb-3">
+          Two layers. <span className="text-ink">Server cache</span> (Vercel Data Cache,
+          shared across all visitors) decides how stale a fetch can be before it triggers
+          a fresh pull from MLB. <span className="text-ink">Client auto-refresh</span>
+          (router.refresh on a timer, paused when the tab is hidden) decides how often
+          your open browser tab re-renders so you see the new data without a manual
+          reload. Both are at-most-stale guarantees — not push.
+        </p>
         <div className="text-2xs text-ink-muted">
           <table className="w-full">
             <thead>
@@ -151,6 +159,51 @@ export default function LabPage() {
               ))}
             </tbody>
           </table>
+        </div>
+
+        <div className="mt-4 text-2xs text-ink-muted">
+          <div className="label-micro mb-2">Client auto-refresh cadence</div>
+          <table className="w-full">
+            <thead>
+              <tr className="text-2xs uppercase tracking-micro text-ink-muted border-b border-line">
+                <th className="text-left font-medium pb-2">Page</th>
+                <th className="text-left font-medium pb-2">Cadence</th>
+                <th className="text-left font-medium pb-2">When</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr className="border-b border-line-subtle">
+                <td className="py-1.5 text-ink">League Command Center</td>
+                <td className="py-1.5 stat-num">30s</td>
+                <td className="py-1.5">Any live game today</td>
+              </tr>
+              <tr className="border-b border-line-subtle">
+                <td className="py-1.5 text-ink">League Command Center</td>
+                <td className="py-1.5 stat-num">2m</td>
+                <td className="py-1.5">Today has games but none live</td>
+              </tr>
+              <tr className="border-b border-line-subtle">
+                <td className="py-1.5 text-ink">Game page (live)</td>
+                <td className="py-1.5 stat-num">15s</td>
+                <td className="py-1.5">Game is in progress</td>
+              </tr>
+              <tr className="border-b border-line-subtle">
+                <td className="py-1.5 text-ink">Game page (preview)</td>
+                <td className="py-1.5 stat-num">5m</td>
+                <td className="py-1.5">Catches lineup announcements + first-pitch flip</td>
+              </tr>
+              <tr className="border-b border-line-subtle last:border-0">
+                <td className="py-1.5 text-ink">Everything else</td>
+                <td className="py-1.5 stat-num">none</td>
+                <td className="py-1.5">Loads fresh on each navigation</td>
+              </tr>
+            </tbody>
+          </table>
+          <p className="mt-3">
+            Auto-refresh pauses when the tab is hidden (no quota burn on
+            background tabs) and immediately refreshes once on tab focus.
+            Each indicator can be clicked to pause/resume.
+          </p>
         </div>
       </Panel>
 

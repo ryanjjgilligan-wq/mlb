@@ -8,6 +8,7 @@ import { Stat } from '@/components/ui/Stat';
 import { ymd, shiftYmd } from '@/lib/time';
 import { fmtAvg, fmtSigned, pythagorean } from '@/lib/saber';
 import { ChevronRight } from 'lucide-react';
+import { AutoRefresh } from '@/components/AutoRefresh';
 
 export const revalidate = 30;
 
@@ -64,6 +65,15 @@ export default async function HomePage({
               <>
                 <span className="px-2 text-ink-faint">·</span>
                 <Badge variant="neg" pulse>{live.length} live</Badge>
+              </>
+            )}
+            {games.length > 0 && today === ymd() && (
+              <>
+                <span className="px-2 text-ink-faint">·</span>
+                <AutoRefresh
+                  intervalMs={live.length > 0 ? 30_000 : 120_000}
+                  label={live.length > 0 ? 'auto-refresh 30s' : 'auto-refresh 2m'}
+                />
               </>
             )}
           </p>
