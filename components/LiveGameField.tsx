@@ -34,48 +34,127 @@ export function LiveGameField({ d }: { d: LiveFieldData }) {
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-[300px_1fr] gap-6 items-start">
-      {/* The diamond */}
+      {/* Real-looking baseball field, top-down view */}
       <div className="relative mx-auto">
-        <svg viewBox="0 0 320 320" width="300" height="300" className="block">
-          {/* Outfield arc */}
+        <svg viewBox="0 0 400 400" width="320" height="320" className="block">
+          <defs>
+            {/* Grass gradient — slight radial darkening toward outfield */}
+            <radialGradient id="grass" cx="50%" cy="100%" r="120%">
+              <stop offset="0%" stopColor="#3a7a3a" />
+              <stop offset="50%" stopColor="#2c6a2c" />
+              <stop offset="100%" stopColor="#1f4f1f" />
+            </radialGradient>
+            {/* Dirt gradient */}
+            <radialGradient id="dirt" cx="50%" cy="50%" r="60%">
+              <stop offset="0%" stopColor="#a17a4d" />
+              <stop offset="100%" stopColor="#7a5a36" />
+            </radialGradient>
+            {/* Mound gradient with subtle highlight */}
+            <radialGradient id="mound" cx="50%" cy="40%" r="60%">
+              <stop offset="0%" stopColor="#b88a55" />
+              <stop offset="100%" stopColor="#7a5a36" />
+            </radialGradient>
+            {/* Mowed-grass alternating stripes */}
+            <pattern id="mow" x="0" y="0" width="40" height="40" patternUnits="userSpaceOnUse" patternTransform="rotate(0)">
+              <rect width="40" height="40" fill="#2c6a2c" />
+              <rect width="40" height="20" fill="#357535" />
+            </pattern>
+          </defs>
+
+          {/* Outfield grass — fan from home plate to wall, true sector shape */}
           <path
-            d="M 30 220 A 130 130 0 0 1 290 220"
-            stroke="var(--line-strong)"
-            strokeWidth="1.5"
-            fill="var(--bg-sunken)"
-            opacity="0.5"
+            d="M 200 320 L 30 150 A 240 240 0 0 1 370 150 Z"
+            fill="url(#grass)"
           />
-          {/* Foul lines */}
-          <line x1="160" y1="220" x2="40" y2="100" stroke="var(--line)" strokeWidth="1.2" />
-          <line x1="160" y1="220" x2="280" y2="100" stroke="var(--line)" strokeWidth="1.2" />
-          {/* Infield diamond */}
+          {/* Mowed-grass stripes overlay (subtle) */}
+          <path
+            d="M 200 320 L 30 150 A 240 240 0 0 1 370 150 Z"
+            fill="url(#mow)"
+            opacity="0.18"
+          />
+          {/* Outfield wall */}
+          <path
+            d="M 30 150 A 240 240 0 0 1 370 150"
+            fill="none"
+            stroke="#e5e4e1"
+            strokeWidth="2"
+            opacity="0.35"
+          />
+
+          {/* Infield dirt — circle around the infield */}
+          <circle cx="200" cy="240" r="105" fill="url(#dirt)" />
+
+          {/* Infield grass diamond inside the dirt cutout */}
           <polygon
-            points="160,220 235,150 160,80 85,150"
-            fill="var(--bg-raised)"
-            stroke="var(--line-strong)"
-            strokeWidth="1.5"
+            points="200,310 264,246 200,182 136,246"
+            fill="#357535"
+            stroke="#fff"
+            strokeWidth="2"
+            strokeOpacity="0.85"
           />
+
+          {/* Foul lines (clearly visible white chalk) */}
+          <line x1="200" y1="310" x2="40" y2="150" stroke="#fff" strokeWidth="2" opacity="0.85" />
+          <line x1="200" y1="310" x2="360" y2="150" stroke="#fff" strokeWidth="2" opacity="0.85" />
+
+          {/* Base paths — implied by infield diamond edges, already drawn */}
+
           {/* Pitcher's mound */}
-          <circle cx="160" cy="170" r="14" fill="var(--bg-panel)" stroke="var(--line-strong)" strokeWidth="1" />
+          <circle cx="200" cy="246" r="20" fill="url(#mound)" />
+          {/* Pitching rubber (white slab) */}
+          <rect x="194" y="244" width="12" height="3.5" fill="#fff" rx="0.5" />
 
           {/* Bases */}
-          <Base x={160} y={220} occupied={false} label="HOME" />
-          <Base x={235} y={150} occupied={!!d.first} label="1B" />
-          <Base x={160} y={80} occupied={!!d.second} label="2B" />
-          <Base x={85} y={150} occupied={!!d.third} label="3B" />
+          <Base x={264} y={246} occupied={!!d.first} highlight={false} />
+          <Base x={200} y={182} occupied={!!d.second} highlight={false} />
+          <Base x={136} y={246} occupied={!!d.third} highlight={false} />
 
-          {/* Inning state arrow */}
-          <text x="160" y="304" textAnchor="middle" fill="var(--ink-muted)" fontSize="10" fontFamily="ui-monospace">
+          {/* Home plate (pentagon shape pointing toward the catcher / out of frame) */}
+          <polygon
+            points="200,318 191,310 191,302 209,302 209,310"
+            fill="#fff"
+            stroke="#222"
+            strokeWidth="0.8"
+          />
+
+          {/* Batter's box outlines (rectangles flanking home plate) */}
+          <rect x="174" y="298" width="14" height="22" fill="none" stroke="#fff" strokeWidth="1" opacity="0.4" />
+          <rect x="212" y="298" width="14" height="22" fill="none" stroke="#fff" strokeWidth="1" opacity="0.4" />
+
+          {/* Catcher's box behind the plate */}
+          <path d="M 188 318 Q 200 332 212 318" fill="none" stroke="#fff" strokeWidth="1" opacity="0.4" />
+
+          {/* On-deck circles (visual flair) */}
+          <circle cx="135" cy="336" r="9" fill="none" stroke="#fff" strokeWidth="1" opacity="0.3" />
+          <circle cx="265" cy="336" r="9" fill="none" stroke="#fff" strokeWidth="1" opacity="0.3" />
+
+          {/* Pitcher marker (tiny circle on the mound, hat-tip to the player figure) */}
+          <circle cx="200" cy="244" r="3.5" fill="#1a1a1a" stroke="#fff" strokeWidth="0.8" />
+
+          {/* Batter marker (small circle in the appropriate box, depending on handedness) */}
+          {d.batter && (
+            <circle
+              cx={d.batter.bats === 'L' ? 219 : 181}
+              cy={310}
+              r={3.2}
+              fill="#1a1a1a"
+              stroke="#fff"
+              strokeWidth="0.8"
+            />
+          )}
+
+          {/* Inning indicator at bottom */}
+          <text x="200" y="392" textAnchor="middle" fill="var(--ink-muted)" fontSize="11" fontFamily="ui-monospace">
             {d.inningState} {d.inning}
-            {d.inning === 1 ? 'st' : d.inning === 2 ? 'nd' : d.inning === 3 ? 'rd' : 'th'}
+            {ord(d.inning)}
           </text>
         </svg>
 
-        {/* Runner names overlaid */}
+        {/* Runner name chips overlaid on bases */}
         <div className="absolute inset-0 pointer-events-none">
-          {d.first && <RunnerLabel x={235} y={150} name={d.first.name} id={d.first.id} />}
-          {d.second && <RunnerLabel x={160} y={80} name={d.second.name} id={d.second.id} />}
-          {d.third && <RunnerLabel x={85} y={150} name={d.third.name} id={d.third.id} />}
+          {d.first && <RunnerLabel x={264} y={246} name={d.first.name} id={d.first.id} side="right" />}
+          {d.second && <RunnerLabel x={200} y={182} name={d.second.name} id={d.second.id} side="top" />}
+          {d.third && <RunnerLabel x={136} y={246} name={d.third.name} id={d.third.id} side="left" />}
         </div>
       </div>
 
@@ -140,47 +219,59 @@ export function LiveGameField({ d }: { d: LiveFieldData }) {
   );
 }
 
-function Base({ x, y, occupied, label }: { x: number; y: number; occupied: boolean; label: string }) {
+function Base({ x, y, occupied }: { x: number; y: number; occupied: boolean; highlight?: boolean }) {
+  // Real bases: white square, slightly tilted 45° so corners point along the basepaths
   return (
     <g>
+      {/* Subtle shadow */}
       <rect
-        x={x - 11}
-        y={y - 11}
-        width={22}
-        height={22}
-        transform={`rotate(45 ${x} ${y})`}
-        fill={occupied ? 'var(--accent)' : 'var(--bg-raised)'}
-        stroke={occupied ? 'var(--accent)' : 'var(--line-strong)'}
-        strokeWidth="1.5"
+        x={x - 8}
+        y={y - 8 + 1.5}
+        width={16}
+        height={16}
+        transform={`rotate(45 ${x} ${y + 1.5})`}
+        fill="#000"
+        opacity="0.25"
       />
-      <text
-        x={x}
-        y={y + 28}
-        textAnchor="middle"
-        fill="var(--ink-faint)"
-        fontSize="9"
-        fontFamily="ui-monospace"
-      >
-        {label}
-      </text>
+      <rect
+        x={x - 8}
+        y={y - 8}
+        width={16}
+        height={16}
+        transform={`rotate(45 ${x} ${y})`}
+        fill={occupied ? '#facc15' : '#fff'}
+        stroke={occupied ? '#a3850f' : '#cdcdcd'}
+        strokeWidth="1"
+      />
     </g>
   );
 }
 
-function RunnerLabel({ x, y, name, id }: { x: number; y: number; name: string; id: number }) {
-  // Convert SVG coords (out of 320) to percent
-  const left = `${(x / 320) * 100}%`;
-  const top = `${(y / 320) * 100}%`;
+function RunnerLabel({ x, y, name, id, side }: { x: number; y: number; name: string; id: number; side: 'left' | 'right' | 'top' }) {
+  // Convert SVG coords (out of 400) to percent
+  const left = `${(x / 400) * 100}%`;
+  const top = `${(y / 400) * 100}%`;
+  // Position the chip outside the diamond so it doesn't cover the base
+  const offset = side === 'top' ? { marginTop: -28 } : side === 'left' ? { marginLeft: -42, marginTop: -2 } : { marginLeft: 42, marginTop: -2 };
   return (
     <Link
       href={`/player/${id}`}
-      className="pointer-events-auto absolute -translate-x-1/2 -translate-y-1/2 px-1.5 py-0.5 rounded bg-bg-sunken border border-accent text-2xs stat-num text-accent hover:bg-accent hover:text-bg whitespace-nowrap"
-      style={{ left, top, marginTop: -22 }}
+      className="pointer-events-auto absolute -translate-x-1/2 -translate-y-1/2 px-1.5 py-0.5 rounded bg-bg-sunken border border-accent text-2xs stat-num text-accent hover:bg-accent hover:text-bg whitespace-nowrap shadow-md"
+      style={{ left, top, ...offset }}
       title={name}
     >
       {abbreviateName(name)}
     </Link>
   );
+}
+
+function ord(n: number): string {
+  if (n >= 11 && n <= 13) return 'th';
+  const last = n % 10;
+  if (last === 1) return 'st';
+  if (last === 2) return 'nd';
+  if (last === 3) return 'rd';
+  return 'th';
 }
 
 function abbreviateName(name: string): string {

@@ -48,7 +48,7 @@ import { pythagorean, fmtAvg } from '@/lib/saber';
 import { preGameHomeWP } from '@/lib/winprob';
 import { LocalTime } from '@/components/LocalTime';
 
-export const revalidate = 15;
+export const revalidate = 5;
 
 export async function generateMetadata({ params }: { params: { id: string } }) {
   return { title: `Game ${params.id}` };
@@ -401,7 +401,7 @@ export default async function GamePage({ params }: { params: { id: string } }) {
             {isLive && (
               <>
                 <span className="text-2xs text-ink-faint">·</span>
-                <AutoRefresh intervalMs={15_000} label="auto-refresh 15s" />
+                <AutoRefresh intervalMs={5_000} label="auto-refresh 5s" />
               </>
             )}
             {isPreview && (

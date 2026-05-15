@@ -63,7 +63,7 @@ export async function getSchedule(date?: string): Promise<ScheduleDate[]> {
   const d = date ?? new Date().toISOString().slice(0, 10);
   const data = await get<{ dates: ScheduleDate[] }>(
     `/schedule?sportId=1&date=${d}&hydrate=linescore,probablePitcher,team,venue`,
-    { revalidate: 30, tags: ['schedule'] }
+    { revalidate: 5, tags: ['schedule'] }
   );
   return data.dates ?? [];
 }
@@ -524,7 +524,7 @@ export async function getRemainingSchedule(teamId: number, season?: number): Pro
 export async function getGameLive(gamePk: number): Promise<any> {
   const url = `${BASE_V11}/game/${gamePk}/feed/live`;
   const res = await fetch(url, {
-    next: { revalidate: 15, tags: [`game-${gamePk}`] },
+    next: { revalidate: 5, tags: [`game-${gamePk}`] },
     headers: { Accept: 'application/json' },
   });
   if (!res.ok) throw new Error(`MLB live feed ${res.status} for game ${gamePk}`);
@@ -543,7 +543,7 @@ export async function getGameLinescore(gamePk: number): Promise<any> {
 export async function getGameWinProbability(gamePk: number): Promise<any[]> {
   // MLB exposes per-play win probability for completed/live games
   const data = await get<{ winProbability?: any[] }>(`/game/${gamePk}/winProbability`, {
-    revalidate: 15,
+    revalidate: 5,
   });
   return data.winProbability ?? [];
 }

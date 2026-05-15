@@ -16,7 +16,7 @@ import { LocalDate } from '@/components/LocalDate';
 import { Countdown } from '@/components/Countdown';
 import { Radio } from 'lucide-react';
 
-export const revalidate = 15;
+export const revalidate = 5;
 export const metadata = {
   title: 'Live',
   description: 'Every MLB game currently in progress — live scores, win probability, pitcher/batter matchups.',
@@ -121,7 +121,7 @@ export default async function LivePage() {
               <>
                 <Badge variant="neg" pulse>{live.length} live</Badge>
                 <span className="px-1 text-ink-faint">·</span>
-                <AutoRefresh intervalMs={15_000} label="auto-refresh 15s" />
+                <AutoRefresh intervalMs={5_000} label="auto-refresh 5s" />
               </>
             ) : (
               <span className="text-ink-muted">Nothing in progress right now.</span>

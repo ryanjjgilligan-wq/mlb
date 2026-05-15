@@ -265,8 +265,8 @@ export default function LabPage() {
             </thead>
             <tbody>
               {[
-                ['Live game feed', '15s', 'Pitch-by-pitch deltas'],
-                ['Schedule / scoreboard', '30s', 'Score updates'],
+                ['Live game feed', '5s', 'Pitch-by-pitch deltas — match the live broadcast cadence'],
+                ['Schedule / scoreboard', '5s', 'Live scores update at near-broadcast speed'],
                 ['Standings', '5m', 'Slow-changing'],
                 ['Season stats', '10m', 'Game-end recomputes'],
                 ['Rosters', '30m', 'Transactions infrequent'],
@@ -306,9 +306,14 @@ export default function LabPage() {
                 <td className="py-1.5">Today has games but none live</td>
               </tr>
               <tr className="border-b border-line-subtle">
+                <td className="py-1.5 text-ink">Live tab (any in-progress)</td>
+                <td className="py-1.5 stat-num">5s</td>
+                <td className="py-1.5">Match broadcast cadence</td>
+              </tr>
+              <tr className="border-b border-line-subtle">
                 <td className="py-1.5 text-ink">Game page (live)</td>
-                <td className="py-1.5 stat-num">15s</td>
-                <td className="py-1.5">Game is in progress</td>
+                <td className="py-1.5 stat-num">5s</td>
+                <td className="py-1.5">Pitch-by-pitch updates</td>
               </tr>
               <tr className="border-b border-line-subtle">
                 <td className="py-1.5 text-ink">Game page (preview)</td>
