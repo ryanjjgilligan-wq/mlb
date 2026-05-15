@@ -19,6 +19,9 @@ import { blendStats, recencyWeightedFIP } from '@/lib/recency';
 import { computeBullpenFatigue, type BullpenSummary } from '@/lib/bullpen';
 import { LiveAdjustments } from '@/components/LiveAdjustments';
 import { LivePropTracker, type LivePropRow } from '@/components/LivePropTracker';
+import { LiveGameField, type LiveFieldData } from '@/components/LiveGameField';
+import { LivePitchSequence, type LivePitchEvent } from '@/components/LivePitchSequence';
+import { LiveInningStrip } from '@/components/LiveInningStrip';
 import type { LiveGameState } from '@/lib/liveAdjust';
 import { H2HPanel } from '@/components/H2HPanel';
 import { BvPMatrix } from '@/components/BvPMatrix';
@@ -442,35 +445,147 @@ export default async function GamePage({ params }: { params: { id: string } }) {
         </div>
       </div>
 
-      {/* Live in-game adjustments — only render when game is in progress */}
+      {/* Live cockpit — only renders when game is in progress */}
       {isLive && linescore && (
-        <Panel
-          title={
-            <span className="flex items-center gap-2">
-              Live in-game projections
-              <Badge variant="neg" pulse>LIVE</Badge>
-            </span>
-          }
-          subtitle="Pre-game model recomputed against actual game state · refreshes every 15s"
-        >
-          <LiveAdjustments
-            state={{
-              inning: linescore.currentInning ?? 0,
-              isTopInning: !!linescore.isTopInning,
-              outs: linescore.outs ?? 0,
-              awayRuns: linescore.teams?.away?.runs ?? 0,
-              homeRuns: linescore.teams?.home?.runs ?? 0,
-              innings: (linescore.innings ?? []).map((i: any) => ({
-                num: i.num,
-                away: { runs: i.away?.runs },
-                home: { runs: i.home?.runs },
-              })),
-            } as LiveGameState}
-            preGameTotal={runTotal.expectedTotal}
-            preGameNRFI={first5.pNRFI}
-            preGameF5Total={first5.expectedTotal}
-          />
-        </Panel>
+        <>
+          {/* The big visual field */}
+          <Panel
+            title={
+              <span className="flex items-center gap-2">
+                Field
+                <Badge variant="neg" pulse>LIVE</Badge>
+              </span>
+            }
+            subtitle="Diamond, runners, count, outs, current matchup · refreshes every 15s"
+          >
+            <LiveGameField
+              d={{
+                isTopInning: !!linescore.isTopInning,
+                inning: linescore.currentInning ?? 1,
+                inningState: linescore.inningState ?? '',
+                outs: linescore.outs ?? 0,
+                balls: linescore.balls ?? 0,
+                strikes: linescore.strikes ?? 0,
+                awayName: away.teamName,
+                awayAbbr: gameData.teams?.away?.abbreviation,
+                homeName: home.teamName,
+                homeAbbr: gameData.teams?.home?.abbreviation,
+                batter: linescore.offense?.batter
+                  ? { id: linescore.offense.batter.id, name: linescore.offense.batter.fullName, bats: linescore.offense.batter.batSide?.code }
+                  : undefined,
+                onDeck: linescore.offense?.onDeck
+                  ? { id: linescore.offense.onDeck.id, name: linescore.offense.onDeck.fullName }
+                  : undefined,
+                inHole: linescore.offense?.inHole
+                  ? { id: linescore.offense.inHole.id, name: linescore.offense.inHole.fullName }
+                  : undefined,
+                first: linescore.offense?.first
+                  ? { id: linescore.offense.first.id, name: linescore.offense.first.fullName }
+                  : undefined,
+                second: linescore.offense?.second
+                  ? { id: linescore.offense.second.id, name: linescore.offense.second.fullName }
+                  : undefined,
+                third: linescore.offense?.third
+                  ? { id: linescore.offense.third.id, name: linescore.offense.third.fullName }
+                  : undefined,
+                pitcher: linescore.defense?.pitcher
+                  ? {
+                      id: linescore.defense.pitcher.id,
+                      name: linescore.defense.pitcher.fullName,
+                      throws: linescore.defense.pitcher.pitchHand?.code,
+                      pitchesThrown: (linescore.defense?.pitcher && boxscore?.teams?.[linescore.isTopInning ? 'home' : 'away']?.players?.[`ID${linescore.defense.pitcher.id}`]?.stats?.pitching?.numberOfPitches) ?? undefined,
+                    }
+                  : undefined,
+                catcher: linescore.defense?.catcher
+                  ? { id: linescore.defense.catcher.id, name: linescore.defense.catcher.fullName }
+                  : undefined,
+              } as LiveFieldData}
+            />
+          </Panel>
+
+          {/* Inning-by-inning runs heat strip */}
+          {linescore.innings && linescore.innings.length > 0 && (
+            <Panel
+              title="Inning runs"
+              subtitle="Heat shading scales with runs scored each inning · current inning highlighted"
+              flush
+            >
+              <LiveInningStrip
+                innings={linescore.innings.map((i: any) => ({
+                  num: i.num,
+                  away: { runs: i.away?.runs },
+                  home: { runs: i.home?.runs },
+                }))}
+                awayName={away.teamName}
+                homeName={home.teamName}
+                currentInning={linescore.currentInning}
+              />
+            </Panel>
+          )}
+
+          {/* Pitch-by-pitch for the current at-bat */}
+          {(() => {
+            const cp = liveData?.plays?.currentPlay;
+            if (!cp || !cp.playEvents || cp.playEvents.length === 0) return null;
+            const pitches: LivePitchEvent[] = cp.playEvents
+              .filter((e: any) => e.isPitch)
+              .map((e: any, idx: number) => ({
+                index: idx,
+                pitchType: e.details?.type?.code,
+                pitchTypeName: e.details?.type?.description,
+                startSpeed: e.pitchData?.startSpeed,
+                pX: e.pitchData?.coordinates?.pX,
+                pZ: e.pitchData?.coordinates?.pZ,
+                call: e.details?.code,
+                description: e.details?.description,
+                isInPlay: e.details?.isInPlay,
+                result: e.result?.event,
+              }));
+            return (
+              <Panel
+                title="Current at-bat · pitch sequence"
+                subtitle={`${pitches.length} pitch${pitches.length === 1 ? '' : 'es'} so far · color by call · size by velocity`}
+                flush
+              >
+                <LivePitchSequence
+                  pitches={pitches}
+                  count={{ balls: linescore.balls ?? 0, strikes: linescore.strikes ?? 0 }}
+                  batterName={linescore.offense?.batter?.fullName}
+                  pitcherName={linescore.defense?.pitcher?.fullName}
+                />
+              </Panel>
+            );
+          })()}
+
+          {/* Live in-game model adjustments */}
+          <Panel
+            title={
+              <span className="flex items-center gap-2">
+                Live in-game projections
+                <Badge variant="neg" pulse>LIVE</Badge>
+              </span>
+            }
+            subtitle="Pre-game model recomputed against actual game state"
+          >
+            <LiveAdjustments
+              state={{
+                inning: linescore.currentInning ?? 0,
+                isTopInning: !!linescore.isTopInning,
+                outs: linescore.outs ?? 0,
+                awayRuns: linescore.teams?.away?.runs ?? 0,
+                homeRuns: linescore.teams?.home?.runs ?? 0,
+                innings: (linescore.innings ?? []).map((i: any) => ({
+                  num: i.num,
+                  away: { runs: i.away?.runs },
+                  home: { runs: i.home?.runs },
+                })),
+              } as LiveGameState}
+              preGameTotal={runTotal.expectedTotal}
+              preGameNRFI={first5.pNRFI}
+              preGameF5Total={first5.expectedTotal}
+            />
+          </Panel>
+        </>
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
