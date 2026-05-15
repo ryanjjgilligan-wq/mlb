@@ -3,11 +3,13 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/cn';
-import { Activity, BarChart3, Users, BookOpenCheck, Search, Star } from 'lucide-react';
+import { Activity, BarChart3, Users, BookOpenCheck, Search, Star, Radio } from 'lucide-react';
 import { SearchCommand } from './SearchCommand';
+import { LiveDot } from './LiveDot';
 
 const nav = [
   { href: '/', label: 'League', icon: Activity },
+  { href: '/live', label: 'Live', icon: Radio },
   { href: '/teams', label: 'Teams', icon: Users },
   { href: '/standings', label: 'Standings', icon: BarChart3 },
   { href: '/watchlist', label: 'Watchlist', icon: Star },
@@ -39,11 +41,12 @@ export function Nav() {
                 key={item.href}
                 href={item.href}
                 className={cn(
-                  'px-2.5 py-1 rounded text-ink-muted hover:text-ink hover:bg-bg-hover transition-colors',
+                  'px-2.5 py-1 rounded text-ink-muted hover:text-ink hover:bg-bg-hover transition-colors flex items-center gap-1.5',
                   active && 'text-ink bg-bg-raised'
                 )}
               >
                 {item.label}
+                {item.href === '/live' && <LiveDot />}
               </Link>
             );
           })}

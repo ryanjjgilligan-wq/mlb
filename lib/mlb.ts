@@ -326,6 +326,7 @@ export async function getGameLive(gamePk: number): Promise<any> {
   return res.json();
 }
 
+
 export async function getGameBoxscore(gamePk: number): Promise<any> {
   return get<any>(`/game/${gamePk}/boxscore`, { revalidate: 15 });
 }
