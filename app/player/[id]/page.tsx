@@ -98,7 +98,7 @@ export default async function PlayerPage({ params }: { params: { id: string } })
           <p className="text-sm text-ink-muted mt-1 flex items-center gap-2 flex-wrap">
             {player.currentTeam && (
               <Link href={`/team/${player.currentTeam.id}`} className="flex items-center gap-1.5 hover:text-ink">
-                <img src={teamCapLogoUrl(player.currentTeam.id)} alt="" className="w-4 h-4 invert opacity-80" />
+                <img src={teamCapLogoUrl(player.currentTeam.id)} alt="" className="w-4 h-4 team-logo opacity-80" />
                 {player.currentTeam.name}
               </Link>
             )}

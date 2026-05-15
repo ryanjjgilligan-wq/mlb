@@ -6,6 +6,7 @@ import { cn } from '@/lib/cn';
 import { Activity, BarChart3, Users, BookOpenCheck, Search, Star, Radio } from 'lucide-react';
 import { SearchCommand } from './SearchCommand';
 import { LiveDot } from './LiveDot';
+import { ThemeToggle } from './ThemeToggle';
 
 const nav = [
   { href: '/', label: 'League', icon: Activity },
@@ -53,6 +54,7 @@ export function Nav() {
         </nav>
         <div className="ml-auto flex items-center gap-3">
           <SearchCommand />
+          <ThemeToggle />
         </div>
       </div>
     </header>

@@ -6,36 +6,34 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        // Base neutrals — deep, not pure black
         bg: {
-          DEFAULT: '#0a0a0b',
-          raised: '#101013',
-          sunken: '#070708',
-          panel: '#0f0f12',
-          hover: '#16161a',
+          DEFAULT: 'var(--bg)',
+          raised: 'var(--bg-raised)',
+          sunken: 'var(--bg-sunken)',
+          panel: 'var(--bg-panel)',
+          hover: 'var(--bg-hover)',
         },
         line: {
-          DEFAULT: '#1f1f24',
-          strong: '#2a2a31',
-          subtle: '#161619',
+          DEFAULT: 'var(--line)',
+          strong: 'var(--line-strong)',
+          subtle: 'var(--line-subtle)',
         },
         ink: {
-          DEFAULT: '#e8e8ec',
-          muted: '#9a9aa3',
-          subtle: '#62626b',
-          faint: '#3a3a42',
+          DEFAULT: 'var(--ink)',
+          muted: 'var(--ink-muted)',
+          subtle: 'var(--ink-subtle)',
+          faint: 'var(--ink-faint)',
         },
-        // Signal colors — used only for meaningful deltas
+        // Signal colors are semantic, mostly stable across modes
         signal: {
-          pos: '#34d399', // green — over expectation / up
-          neg: '#f87171', // red — under expectation / down
-          warn: '#fbbf24', // amber — caution
-          info: '#60a5fa', // blue — informational
+          pos: '#16a34a',
+          neg: '#dc2626',
+          warn: '#d97706',
+          info: '#2563eb',
         },
-        // Accent — singular brand color, used sparingly
         accent: {
-          DEFAULT: '#facc15', // diamond yellow
-          dim: '#a3850f',
+          DEFAULT: 'var(--accent)',
+          dim: 'var(--accent-dim)',
         },
       },
       fontFamily: {

@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { Badge } from './ui/Badge';
 import type { ScheduleGame } from '@/lib/mlb';
 import { teamCapLogoUrl } from '@/lib/mlb';
-import { formatGameTime } from '@/lib/time';
+import { LocalTime } from './LocalTime';
 
 export function GameRow({ game }: { game: ScheduleGame }) {
   const state = game.status.abstractGameState; // Preview | Live | Final
@@ -30,7 +30,7 @@ export function GameRow({ game }: { game: ScheduleGame }) {
         <div className="text-right shrink-0 min-w-[88px]">
           {isPreview && (
             <>
-              <div className="text-2xs text-ink-muted">{formatGameTime(game.gameDate)}</div>
+              <LocalTime iso={game.gameDate} format="time" className="text-2xs text-ink-muted stat-num" />
               {game.venue?.name && (
                 <div className="text-2xs text-ink-faint truncate max-w-[110px]">{game.venue.name}</div>
               )}
@@ -70,7 +70,7 @@ function TeamLine({
       <img
         src={teamCapLogoUrl(team.team.id)}
         alt=""
-        className="w-5 h-5 invert opacity-90"
+        className="w-5 h-5 team-logo opacity-90"
         loading="lazy"
       />
       <span className="text-sm font-medium truncate flex-1">{team.team.name}</span>

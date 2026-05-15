@@ -30,7 +30,7 @@ export default async function TeamsPage() {
                   href={`/team/${t.id}`}
                   className="flex items-center gap-3 px-3 py-2 row-hover transition-colors"
                 >
-                  <img src={teamCapLogoUrl(t.id)} alt="" className="w-6 h-6 invert opacity-90" />
+                  <img src={teamCapLogoUrl(t.id)} alt="" className="w-6 h-6 team-logo opacity-90" />
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium truncate">{t.name}</div>
                     <div className="text-2xs text-ink-faint truncate">{t.venue?.name}</div>

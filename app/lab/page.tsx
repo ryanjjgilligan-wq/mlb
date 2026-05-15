@@ -108,17 +108,56 @@ export default function LabPage() {
         />
         <Section
           name="Run total prediction"
-          status="todo"
-          formula="Planned: Poisson / Negative Binomial regression on team RS/G, opp RA/G, starter FIP, park, weather"
-          source="Standard sports-modeling approach"
-          notes={['Not yet shipped. Needs offline training pipeline.']}
+          status="baseline"
+          formula={
+            "λ_home = leagueAvg · (home.RS/G / leagueAvg) · (away_RA_blend / leagueAvg)\n" +
+            "λ_away = symmetric\n" +
+            "away_RA_blend = away.RA/G · (1 − IP_share) + home_starter.FIP · IP_share\n" +
+            "total = (λ_home + λ_away) × park × weather × travel × rest\n" +
+            "95% CI from normal approx with overdispersion ψ = 1.5"
+          }
+          source={
+            "League rate 4.5 R/G (current era). Park factors: BBRef 3-yr publicly-published values. " +
+            "Weather effect coefficients: temperature ~0.15%/°F (Statcast carry studies); wind ~0.6%/mph " +
+            "out/in (Alan Nathan, Statcast carry analyses). Travel haversine-derived from venue lat/lon. " +
+            "FIP blend via expected starter IP share."
+          }
+          notes={[
+            'Inputs: team-level RS/G and RA/G, starter FIP + IP/start, park factor, MLB weather payload, distance from each team\'s last venue, days since last game.',
+            'Each multiplier is named and shown in the UI ("modifier ledger") so a reader can see exactly why the total moved.',
+            'Limitations: no bullpen quality, no umpire (Statcast pitch-tracking gives ump-by-ump K-zone tendencies — pending Statcast pipeline). No injury-adjusted lineup quality. Park factors are 3-yr averages, not park-by-handedness.',
+            '17 unit tests pass — verify park amplification (Coors > 10, Petco < 9), wind/temp directionality, CI containment.',
+          ]}
         />
         <Section
-          name="Player game-line props"
-          status="todo"
-          formula="Planned: Gamma/Poisson hybrid by event type (hits, TB, K)"
-          source="—"
-          notes={['Not yet shipped.']}
+          name="Batter game-line props (hits, total bases, HR)"
+          status="baseline"
+          formula={
+            "pHit = AVG · K-rate adjustment · park hits factor · weather mult\n" +
+            "  K-rate adj = 1 − 0.5·(oppPitcher_Krate − 0.22), clipped\n" +
+            "ABs/game ≈ PA × 0.91\n" +
+            "p(≥1 H) = 1 − (1 − pHit)^AB (binomial tail)\n" +
+            "p(HR) uses HR/AB × park HR factor × opp HR-allowed rate"
+          }
+          source="Binomial event model on independent ABs; per-AB rates from season splits."
+          notes={[
+            'Inputs: batter\'s split vs opposing starter\'s pitching hand if available, opp starter K%/HR rate, park hits + HR factors, the same weather multiplier as the run total.',
+            'PA assumption: 4.2 (3.5 for #8/#9 in real games — not yet adjusted by batting order).',
+            'Independence assumption: ABs in the same game are correlated (lineup context). Real-world variance is slightly higher.',
+          ]}
+        />
+        <Section
+          name="Starter K prop"
+          status="baseline"
+          formula={
+            "expectedK = ipPerStart · (K9/9) · (1 + 2·(oppKrate − 0.22)) · (parkSO/100)\n" +
+            "P(≥k) = 1 − Poisson_CDF(k−1, expectedK)"
+          }
+          source="Poisson on per-inning K rate, adjusted for opponent contact and park."
+          notes={[
+            'Inputs: starter\'s season K/9, current-season IP/start, opponent lineup K%, park SO factor.',
+            'IP/start capped at 7.5 and floored at 2.5 to bound projections during rotation churn.',
+          ]}
         />
       </Panel>
 

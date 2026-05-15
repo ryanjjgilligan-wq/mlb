@@ -5,9 +5,21 @@ import {
   getGameWinProbability,
   getStandings,
   getPlayerSplits,
+  getPlayerSeasonStats,
+  getLastGameForTeam,
   teamCapLogoUrl,
   playerHeadshotUrl,
 } from '@/lib/mlb';
+import { getPark, haversineMiles } from '@/lib/parks';
+import {
+  predictRunTotal,
+  predictBatterProp,
+  predictPitcherProp,
+  type RunTotalInput,
+  type WeatherInput,
+} from '@/lib/predict';
+import { RunTotalPanel, PlayerPropsTable } from '@/components/PredictionPanel';
+import { fip, parseInnings, kRate } from '@/lib/saber';
 import { Panel } from '@/components/ui/Panel';
 import { Stat } from '@/components/ui/Stat';
 import { Badge } from '@/components/ui/Badge';
@@ -17,7 +29,7 @@ import { LeverageChart, type LeveragePoint } from '@/components/LeverageChart';
 import { AutoRefresh } from '@/components/AutoRefresh';
 import { pythagorean, fmtAvg } from '@/lib/saber';
 import { preGameHomeWP } from '@/lib/winprob';
-import { formatGameTime } from '@/lib/time';
+import { LocalTime } from '@/components/LocalTime';
 
 export const revalidate = 15;
 
@@ -78,8 +90,167 @@ export default async function GamePage({ params }: { params: { id: string } }) {
     pullMatchups(homeBatters, awayStartHand),
   ]);
 
+  // ── Predictions inputs ───────────────────────────────────────────────────
+  const gameDateOnly = (gameData.datetime?.officialDate ?? gameData.datetime?.dateTime?.slice(0, 10) ?? '');
+  const venueId = gameData.venue?.id;
+  const park = getPark(venueId);
+
+  // Weather payload off the live feed
+  const wxRaw = gameData.weather ?? {};
+  const weather: WeatherInput = {
+    tempF: wxRaw.temp ? parseInt(wxRaw.temp, 10) : undefined,
+    windSpeedMph: wxRaw.wind ? parseInt(wxRaw.wind, 10) : undefined,
+    windDir: wxRaw.wind ?? undefined, // "10 mph, Out To CF"
+    condition: wxRaw.condition,
+  };
+
+  // Travel for visitor and rest for both clubs
+  const [awayLast, homeLast] = await Promise.all([
+    gameDateOnly ? getLastGameForTeam(away.id, gameDateOnly).catch(() => null) : Promise.resolve(null),
+    gameDateOnly ? getLastGameForTeam(home.id, gameDateOnly).catch(() => null) : Promise.resolve(null),
+  ]);
+  const awayPrevPark = awayLast?.venue?.id ? getPark(awayLast.venue.id) : park;
+  const awayTravelMiles = haversineMiles(awayPrevPark, park);
+  const daysBetween = (a?: string, b?: string) => {
+    if (!a || !b) return undefined;
+    return Math.max(0, Math.round((new Date(b).getTime() - new Date(a).getTime()) / 86_400_000));
+  };
+  const awayDaysRest = daysBetween(awayLast?.gameDate, gameData.datetime?.dateTime);
+  const homeDaysRest = daysBetween(homeLast?.gameDate, gameData.datetime?.dateTime);
+
+  // Team RS/G and RA/G from standings
   const awayRec = standings.flatMap((d) => d.teamRecords).find((tr) => tr.team.id === away.id);
   const homeRec = standings.flatMap((d) => d.teamRecords).find((tr) => tr.team.id === home.id);
+  const teamRate = (rec: typeof awayRec, key: 'runsScored' | 'runsAllowed') => {
+    if (!rec) return 4.5;
+    const games = rec.wins + rec.losses;
+    return games > 0 ? (rec[key] ?? 0) / games : 4.5;
+  };
+
+  // Starter inputs: pull each starter's season pitching line for FIP + IP
+  const [awayStarterStats, homeStarterStats] = await Promise.all([
+    awayProbable?.id ? getPlayerSeasonStats(awayProbable.id, 'pitching').catch(() => null) : Promise.resolve(null),
+    homeProbable?.id ? getPlayerSeasonStats(homeProbable.id, 'pitching').catch(() => null) : Promise.resolve(null),
+  ]);
+  const starterInput = (sp: any, fallbackFip?: number) => {
+    if (!sp?.stat) return undefined;
+    const computedFip = fip(sp.stat);
+    const ip = parseInnings(sp.stat.inningsPitched);
+    const gs = Number(sp.stat.gamesStarted) || Number(sp.stat.gamesPlayed) || 1;
+    return {
+      fip: Number.isFinite(computedFip) && computedFip > 0 ? computedFip : fallbackFip,
+      ipPerStart: gs > 0 ? Math.min(7, Math.max(3, ip / gs)) : 5.5,
+    };
+  };
+
+  const runTotalInput: RunTotalInput = {
+    home: {
+      teamId: home.id,
+      runsScoredPerGame: teamRate(homeRec, 'runsScored'),
+      runsAllowedPerGame: teamRate(homeRec, 'runsAllowed'),
+    },
+    away: {
+      teamId: away.id,
+      runsScoredPerGame: teamRate(awayRec, 'runsScored'),
+      runsAllowedPerGame: teamRate(awayRec, 'runsAllowed'),
+    },
+    homeStarter: starterInput(homeStarterStats),
+    awayStarter: starterInput(awayStarterStats),
+    park,
+    weather,
+    travel: { awayTravelMiles, awayDaysRest, homeDaysRest },
+  };
+  const runTotal = predictRunTotal(runTotalInput);
+
+  // Per-batter hit/TB props
+  const batterPropFor = (split: any, oppStarterStats: any) => {
+    const s = split?.stat;
+    if (!s) return null;
+    const avg = parseFloat(s.avg ?? '0');
+    const obp = parseFloat(s.obp ?? '0');
+    const slg = parseFloat(s.slg ?? '0');
+    const ab = Number(s.atBats);
+    const hr = Number(s.homeRuns);
+    const hrRate = ab > 0 ? hr / ab : undefined;
+    const oppPa = Number(oppStarterStats?.stat?.battersFaced ?? 0);
+    const oppKRate = oppPa > 0 ? Number(oppStarterStats?.stat?.strikeOuts ?? 0) / oppPa : undefined;
+    const oppHrRate = ab > 0 ? Number(oppStarterStats?.stat?.homeRuns ?? 0) / Math.max(1, Number(oppStarterStats?.stat?.battersFaced ?? ab)) : undefined;
+    return predictBatterProp({
+      pa: 4.2,
+      avg, obp, slg,
+      homeRunRate: hrRate,
+      oppPitcherKRate: oppKRate,
+      oppPitcherHRrate: oppHrRate,
+      parkHrFactor: park.hr,
+      parkHFactor: park.h,
+      weatherMult: runTotal.modifiers.find((m) => m.name === 'Weather')?.multiplier ?? 1,
+    });
+  };
+
+  const awayBatterRows = awayVsHome
+    .map((r) => ({ r, prop: batterPropFor(r.split, homeStarterStats) }))
+    .filter((x) => x.prop)
+    .map(({ r, prop }) => ({
+      name: r.fullName || `#${r.batterId}`,
+      playerId: r.batterId,
+      expected: prop!.expectedHits,
+      label: 'hits',
+      columns: [
+        { key: 'h', label: 'xH', value: prop!.expectedHits.toFixed(2) },
+        { key: 'tb', label: 'xTB', value: prop!.expectedTotalBases.toFixed(2) },
+        { key: 'p1', label: '≥1 H', value: `${(prop!.pHit1Plus * 100).toFixed(0)}%` },
+        { key: 'p2', label: '≥2 H', value: `${(prop!.pHit2Plus * 100).toFixed(0)}%` },
+        { key: 'hr', label: 'HR%', value: `${(prop!.pHrAtLeastOne * 100).toFixed(1)}%` },
+      ],
+    }));
+
+  const homeBatterRows = homeVsAway
+    .map((r) => ({ r, prop: batterPropFor(r.split, awayStarterStats) }))
+    .filter((x) => x.prop)
+    .map(({ r, prop }) => ({
+      name: r.fullName || `#${r.batterId}`,
+      playerId: r.batterId,
+      expected: prop!.expectedHits,
+      label: 'hits',
+      columns: [
+        { key: 'h', label: 'xH', value: prop!.expectedHits.toFixed(2) },
+        { key: 'tb', label: 'xTB', value: prop!.expectedTotalBases.toFixed(2) },
+        { key: 'p1', label: '≥1 H', value: `${(prop!.pHit1Plus * 100).toFixed(0)}%` },
+        { key: 'p2', label: '≥2 H', value: `${(prop!.pHit2Plus * 100).toFixed(0)}%` },
+        { key: 'hr', label: 'HR%', value: `${(prop!.pHrAtLeastOne * 100).toFixed(1)}%` },
+      ],
+    }));
+
+  // Pitcher K props for each starter
+  const pitcherPropFor = (starter: any, oppLineupSplits: Array<{ split: any }>) => {
+    if (!starter?.stat) return null;
+    const ip = parseInnings(starter.stat.inningsPitched);
+    const gs = Number(starter.stat.gamesStarted) || 1;
+    const bf = Number(starter.stat.battersFaced) || 1;
+    const k = Number(starter.stat.strikeOuts) || 0;
+    const k9 = ip > 0 ? (k * 9) / ip : 8;
+    const ipPerStart = ip / Math.max(1, gs);
+    // Opp team K%: rough average of available splits
+    const totalK = oppLineupSplits.reduce((s, r) => s + (Number(r.split?.stat?.strikeOuts) || 0), 0);
+    const totalPa = oppLineupSplits.reduce((s, r) => s + (Number(r.split?.stat?.plateAppearances) || 0), 0);
+    const oppKRate = totalPa > 0 ? totalK / totalPa : 0.22;
+    return predictPitcherProp({
+      oppKRate,
+      pitcherK9: k9,
+      pitcherIpPerStart: ipPerStart,
+      parkSoFactor: park.so,
+    });
+  };
+
+  const awayStarterProp = awayStarterStats ? pitcherPropFor(awayStarterStats, homeVsAway) : null;
+  const homeStarterProp = homeStarterStats ? pitcherPropFor(homeStarterStats, awayVsHome) : null;
+
+  const weatherSummary = weather.tempF
+    ? `${weather.tempF}°F${weather.windDir ? ` · ${weather.windDir}` : ''}${weather.condition ? ` · ${weather.condition}` : ''}`
+    : undefined;
+  const travelSummary = awayTravelMiles > 0
+    ? `Away traveled ${Math.round(awayTravelMiles)} mi${awayDaysRest !== undefined ? ` · ${awayDaysRest}d rest` : ''}`
+    : undefined;
 
   const awayPyth = awayRec ? pythagorean(awayRec.runsScored ?? 0, awayRec.runsAllowed ?? 0) : 0.5;
   const homePyth = homeRec ? pythagorean(homeRec.runsScored ?? 0, homeRec.runsAllowed ?? 0) : 0.5;
@@ -123,9 +294,7 @@ export default async function GamePage({ params }: { params: { id: string } }) {
             {isLive && <Badge variant="neg" pulse>LIVE</Badge>}
             {isFinal && <Badge>FINAL</Badge>}
             {isPreview && <Badge variant="info">PREVIEW</Badge>}
-            <span className="text-2xs text-ink-muted stat-num">
-              {gameData.datetime?.dateTime ? formatGameTime(gameData.datetime.dateTime) : ''}
-            </span>
+            <LocalTime iso={gameData.datetime?.dateTime} format="time" className="text-2xs text-ink-muted stat-num" />
             <span className="text-2xs text-ink-faint">·</span>
             <span className="text-2xs text-ink-muted">{gameData.venue?.name}</span>
             {isLive && (
@@ -150,9 +319,7 @@ export default async function GamePage({ params }: { params: { id: string } }) {
             {isPreview ? (
               <>
                 <div className="label-micro">First pitch</div>
-                <div className="stat-num text-2xl font-semibold mt-1">
-                  {gameData.datetime?.dateTime ? formatGameTime(gameData.datetime.dateTime) : '—'}
-                </div>
+                <LocalTime iso={gameData.datetime?.dateTime} format="time" className="stat-num text-2xl font-semibold mt-1 block" fallback="—" />
               </>
             ) : (
               <>
@@ -207,6 +374,88 @@ export default async function GamePage({ params }: { params: { id: string } }) {
         >
           <WinProbChart data={wpPoints} awayName={away.teamName} homeName={home.teamName} />
         </Panel>
+
+        {/* Run total predictor — full transparency on inputs */}
+        <Panel
+          className="lg:col-span-12"
+          title="Run total prediction"
+          subtitle="Transparent baseline · team RS/RA + starter FIP × park × weather × travel/rest"
+        >
+          <RunTotalPanel
+            output={runTotal}
+            homeName={home.teamName}
+            awayName={away.teamName}
+            parkName={park.name}
+            weatherSummary={weatherSummary}
+            travelSummary={travelSummary}
+          />
+        </Panel>
+
+        {/* Player props — pitchers */}
+        {(awayStarterProp || homeStarterProp) && (
+          <Panel
+            className="lg:col-span-12"
+            title="Starter K props"
+            subtitle="Per-start strikeouts with ≥6 / ≥8 K probabilities · Poisson tail"
+            flush
+          >
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-2xs uppercase tracking-micro text-ink-muted border-b border-line">
+                  <th className="text-left font-medium px-3 py-2">Pitcher</th>
+                  <th className="text-right font-medium px-2 py-2">xK</th>
+                  <th className="text-right font-medium px-2 py-2">≥6 K</th>
+                  <th className="text-right font-medium px-2 py-2">≥8 K</th>
+                </tr>
+              </thead>
+              <tbody>
+                {awayProbable && awayStarterProp && (
+                  <tr className="row-hover border-b border-line-subtle">
+                    <td className="px-3 py-1.5">
+                      <Link href={`/player/${awayProbable.id}`} className="hover:text-accent">{awayProbable.fullName}</Link>
+                      <span className="text-2xs text-ink-faint ml-2">{away.teamName}</span>
+                    </td>
+                    <td className="text-right stat-num px-2 py-1.5 text-ink">{awayStarterProp.expectedStrikeouts.toFixed(2)}</td>
+                    <td className="text-right stat-num px-2 py-1.5 text-ink-muted">{(awayStarterProp.pSixPlus * 100).toFixed(0)}%</td>
+                    <td className="text-right stat-num px-2 py-1.5 text-ink-muted">{(awayStarterProp.pEightPlus * 100).toFixed(0)}%</td>
+                  </tr>
+                )}
+                {homeProbable && homeStarterProp && (
+                  <tr className="row-hover">
+                    <td className="px-3 py-1.5">
+                      <Link href={`/player/${homeProbable.id}`} className="hover:text-accent">{homeProbable.fullName}</Link>
+                      <span className="text-2xs text-ink-faint ml-2">{home.teamName}</span>
+                    </td>
+                    <td className="text-right stat-num px-2 py-1.5 text-ink">{homeStarterProp.expectedStrikeouts.toFixed(2)}</td>
+                    <td className="text-right stat-num px-2 py-1.5 text-ink-muted">{(homeStarterProp.pSixPlus * 100).toFixed(0)}%</td>
+                    <td className="text-right stat-num px-2 py-1.5 text-ink-muted">{(homeStarterProp.pEightPlus * 100).toFixed(0)}%</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </Panel>
+        )}
+
+        {/* Player props — batters */}
+        {(awayBatterRows.length > 0 || homeBatterRows.length > 0) && (
+          <Panel
+            className="lg:col-span-12"
+            title="Batter props"
+            subtitle="Expected hits + total bases vs opposing starter · binomial event probabilities"
+            flush
+          >
+            <div className="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-line">
+              <div className="p-3">
+                <div className="label-micro mb-2 px-1 truncate">{away.teamName} · vs {homeProbable?.fullName ?? 'TBD'}</div>
+                <PlayerPropsTable rows={awayBatterRows} />
+              </div>
+              <div className="p-3">
+                <div className="label-micro mb-2 px-1 truncate">{home.teamName} · vs {awayProbable?.fullName ?? 'TBD'}</div>
+                <PlayerPropsTable rows={homeBatterRows} />
+              </div>
+            </div>
+          </Panel>
+        )}
 
         {/* Probable pitchers / starting pitchers */}
         <Panel
@@ -328,7 +577,7 @@ function TeamColumn({
       href={`/team/${team.id}`}
       className={`flex items-center gap-3 group ${reverse ? 'flex-row-reverse text-right' : ''}`}
     >
-      <img src={teamCapLogoUrl(team.id)} alt="" className="w-10 h-10 invert opacity-90" />
+      <img src={teamCapLogoUrl(team.id)} alt="" className="w-10 h-10 team-logo opacity-90" />
       <div className="min-w-0">
         <div className="text-lg font-semibold tracking-tight group-hover:text-accent transition-colors truncate">
           {team.name}

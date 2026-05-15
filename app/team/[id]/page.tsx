@@ -26,7 +26,8 @@ import {
   expectedRecord,
 } from '@/lib/saber';
 import { runMonteCarlo, type SimGame, type SimTeam } from '@/lib/montecarlo';
-import { shiftYmd, ymd, formatGameTime } from '@/lib/time';
+import { shiftYmd, ymd } from '@/lib/time';
+import { LocalTime } from '@/components/LocalTime';
 
 export const revalidate = 300;
 
@@ -119,7 +120,7 @@ export default async function TeamPage({ params }: { params: { id: string } }) {
     <div className="max-w-[1600px] mx-auto px-4 py-6 space-y-6">
       {/* Identity card */}
       <div className="flex flex-wrap items-center gap-5 panel p-5">
-        <img src={teamCapLogoUrl(team.id)} alt="" className="w-16 h-16 invert opacity-95" />
+        <img src={teamCapLogoUrl(team.id)} alt="" className="w-16 h-16 team-logo opacity-95" />
         <div className="flex-1 min-w-[200px]">
           <div className="flex items-center gap-2 flex-wrap">
             <h1 className="text-2xl font-semibold tracking-tight">{team.name}</h1>
@@ -267,7 +268,7 @@ export default async function TeamPage({ params }: { params: { id: string } }) {
                     <Link href={`/game/${g.gamePk}`} className="flex items-center gap-3 px-3 py-2 row-hover">
                       <span className="text-2xs text-ink-faint stat-num w-12">{g.date.slice(5)}</span>
                       <span className="text-2xs text-ink-muted w-4">{isAway ? '@' : 'vs'}</span>
-                      <img src={teamCapLogoUrl(opp.team.id)} alt="" className="w-4 h-4 invert opacity-80" />
+                      <img src={teamCapLogoUrl(opp.team.id)} alt="" className="w-4 h-4 team-logo opacity-80" />
                       <span className="text-sm flex-1 truncate">{opp.team.name}</span>
                       {state === 'Final' ? (
                         <span className={`text-2xs stat-num ${win ? 'text-signal-pos' : loss ? 'text-signal-neg' : 'text-ink-muted'}`}>
@@ -276,7 +277,7 @@ export default async function TeamPage({ params }: { params: { id: string } }) {
                       ) : state === 'Live' ? (
                         <Badge variant="neg" pulse>LIVE</Badge>
                       ) : (
-                        <span className="text-2xs text-ink-muted stat-num">{formatGameTime(g.gameDate)}</span>
+                        <LocalTime iso={g.gameDate} format="time" className="text-2xs text-ink-muted stat-num" />
                       )}
                     </Link>
                   </li>

@@ -9,6 +9,7 @@ import { ymd, shiftYmd } from '@/lib/time';
 import { fmtAvg, fmtSigned, pythagorean } from '@/lib/saber';
 import { ChevronRight } from 'lucide-react';
 import { AutoRefresh } from '@/components/AutoRefresh';
+import { LocalDate } from '@/components/LocalDate';
 
 export const revalidate = 30;
 
@@ -58,7 +59,7 @@ export default async function HomePage({
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">League Command Center</h1>
           <p className="text-sm text-ink-muted mt-1">
-            <span className="stat-num">{new Date(`${today}T12:00:00Z`).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC' })}</span>
+            <LocalDate ymd={today} className="stat-num" />
             <span className="px-2 text-ink-faint">·</span>
             {games.length} game{games.length === 1 ? '' : 's'} on the slate
             {live.length > 0 && (

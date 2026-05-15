@@ -122,7 +122,7 @@ function TeamRow({
 }) {
   return (
     <Link href={`/team/${team.id}`} className={`flex items-center gap-2 min-w-0 ${dim ? 'opacity-60' : ''}`}>
-      <img src={teamCapLogoUrl(team.id)} alt="" className="w-6 h-6 invert opacity-90 shrink-0" />
+      <img src={teamCapLogoUrl(team.id)} alt="" className="w-6 h-6 team-logo opacity-90 shrink-0" />
       <div className="min-w-0 flex items-center gap-2">
         <span className="text-sm font-medium truncate">{team.name}</span>
         {batting && <span className="text-2xs text-accent">●</span>}
@@ -152,9 +152,9 @@ function BaseDiamond({
   return (
     <svg width="18" height="18" viewBox="0 0 18 18" aria-label="bases">
       <g transform="translate(9 9) rotate(45) translate(-3 -3)">
-        <rect x="6" y="-6" width="6" height="6" fill={first ? '#facc15' : 'none'} stroke="#3a3a42" strokeWidth="0.6" />
-        <rect x="0" y="-12" width="6" height="6" fill={second ? '#facc15' : 'none'} stroke="#3a3a42" strokeWidth="0.6" />
-        <rect x="-6" y="-6" width="6" height="6" fill={third ? '#facc15' : 'none'} stroke="#3a3a42" strokeWidth="0.6" />
+        <rect x="6" y="-6" width="6" height="6" fill={first ? 'var(--accent)' : 'none'} stroke="var(--line-strong)" strokeWidth="0.6" />
+        <rect x="0" y="-12" width="6" height="6" fill={second ? 'var(--accent)' : 'none'} stroke="var(--line-strong)" strokeWidth="0.6" />
+        <rect x="-6" y="-6" width="6" height="6" fill={third ? 'var(--accent)' : 'none'} stroke="var(--line-strong)" strokeWidth="0.6" />
       </g>
     </svg>
   );

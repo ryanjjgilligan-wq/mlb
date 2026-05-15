@@ -10,7 +10,9 @@ import { Badge } from '@/components/ui/Badge';
 import { Empty } from '@/components/ui/Empty';
 import { LiveGameCard, type LiveGameCardData } from '@/components/LiveGameCard';
 import { AutoRefresh } from '@/components/AutoRefresh';
-import { formatGameTime, ymd } from '@/lib/time';
+import { ymd } from '@/lib/time';
+import { LocalTime } from '@/components/LocalTime';
+import { LocalDate } from '@/components/LocalDate';
 import { Radio } from 'lucide-react';
 
 export const revalidate = 15;
@@ -112,7 +114,7 @@ export default async function LivePage() {
             Live
           </h1>
           <p className="text-sm text-ink-muted mt-1 flex items-center gap-2 flex-wrap">
-            <span className="stat-num">{new Date(`${today}T12:00:00Z`).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC' })}</span>
+            <LocalDate ymd={today} className="stat-num" />
             <span className="px-1 text-ink-faint">·</span>
             {live.length > 0 ? (
               <>
@@ -154,7 +156,7 @@ export default async function LivePage() {
             title="No games in progress."
             description={
               upcoming.length > 0
-                ? `Next first pitch: ${formatGameTime(upcoming[0].gameDate)} · ${upcoming[0].teams.away.team.name} @ ${upcoming[0].teams.home.team.name}.`
+                ? <>Next first pitch: <LocalTime iso={upcoming[0].gameDate} format="time" className="stat-num" /> · {upcoming[0].teams.away.team.name} @ {upcoming[0].teams.home.team.name}.</>
                 : final.length > 0
                 ? `All ${final.length} of today's games are final. Check back tomorrow.`
                 : 'Off day. The full league is dark.'
@@ -175,11 +177,11 @@ export default async function LivePage() {
             {upcoming.slice(0, 8).map((g) => (
               <li key={g.gamePk}>
                 <Link href={`/game/${g.gamePk}`} className="flex items-center gap-3 px-3 py-2 row-hover">
-                  <span className="text-2xs text-ink-faint stat-num w-16">{formatGameTime(g.gameDate)}</span>
-                  <img src={teamCapLogoUrl(g.teams.away.team.id)} alt="" className="w-4 h-4 invert opacity-80" />
+                  <LocalTime iso={g.gameDate} format="time" className="text-2xs text-ink-faint stat-num w-16" />
+                  <img src={teamCapLogoUrl(g.teams.away.team.id)} alt="" className="w-4 h-4 team-logo opacity-80" />
                   <span className="text-sm text-ink-muted flex-1 truncate">{g.teams.away.team.name}</span>
                   <span className="text-2xs text-ink-faint">@</span>
-                  <img src={teamCapLogoUrl(g.teams.home.team.id)} alt="" className="w-4 h-4 invert opacity-80" />
+                  <img src={teamCapLogoUrl(g.teams.home.team.id)} alt="" className="w-4 h-4 team-logo opacity-80" />
                   <span className="text-sm flex-1 truncate">{g.teams.home.team.name}</span>
                   {g.teams.home.probablePitcher && (
                     <span className="text-2xs text-ink-faint truncate hidden md:inline">
@@ -205,7 +207,7 @@ export default async function LivePage() {
                 <li key={g.gamePk}>
                   <Link href={`/game/${g.gamePk}`} className="flex items-center gap-3 px-3 py-2 row-hover">
                     <Badge>FINAL</Badge>
-                    <img src={teamCapLogoUrl(a.team.id)} alt="" className="w-4 h-4 invert opacity-80" />
+                    <img src={teamCapLogoUrl(a.team.id)} alt="" className="w-4 h-4 team-logo opacity-80" />
                     <span className={`text-sm flex-1 truncate ${aw ? 'text-ink' : 'text-ink-muted'}`}>
                       {a.team.name}
                     </span>
@@ -213,7 +215,7 @@ export default async function LivePage() {
                     <span className="text-2xs text-ink-faint">·</span>
                     <span className={`stat-num text-sm font-semibold w-6 text-right ${!aw ? 'text-ink' : 'text-ink-muted'}`}>{h.score}</span>
                     <span className={`text-sm flex-1 truncate ${!aw ? 'text-ink' : 'text-ink-muted'}`}>{h.team.name}</span>
-                    <img src={teamCapLogoUrl(h.team.id)} alt="" className="w-4 h-4 invert opacity-80" />
+                    <img src={teamCapLogoUrl(h.team.id)} alt="" className="w-4 h-4 team-logo opacity-80" />
                   </Link>
                 </li>
               );

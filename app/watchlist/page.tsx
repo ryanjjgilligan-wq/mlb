@@ -44,7 +44,7 @@ export default function WatchlistPage() {
                 {teams.map((item) => (
                   <li key={`team-${item.id}`} className="flex items-center gap-3 px-3 py-2 row-hover">
                     <Link href={`/team/${item.id}`} className="flex items-center gap-3 flex-1 min-w-0">
-                      <img src={teamCapLogoUrl(item.id)} alt="" className="w-6 h-6 invert opacity-90" />
+                      <img src={teamCapLogoUrl(item.id)} alt="" className="w-6 h-6 team-logo opacity-90" />
                       <span className="text-sm truncate">{item.name}</span>
                       {item.meta && <Badge>{item.meta}</Badge>}
                     </Link>

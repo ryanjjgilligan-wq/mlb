@@ -300,6 +300,24 @@ export async function getPitchingLeaders(season?: number, limit = 200): Promise<
   return data?.stats?.[0]?.splits ?? [];
 }
 
+/**
+ * Most recent prior game for a team. Used to compute travel distance and
+ * days of rest going into the next matchup.
+ */
+export async function getLastGameForTeam(teamId: number, beforeDate: string, season?: number): Promise<ScheduleGame | null> {
+  const s = season ?? new Date().getFullYear();
+  const data = await get<{ dates: ScheduleDate[] }>(
+    `/schedule?sportId=1&teamId=${teamId}&season=${s}&hydrate=team,venue`,
+    { revalidate: 3600 }
+  );
+  const games = (data.dates ?? [])
+    .filter((d) => d.date < beforeDate)
+    .flatMap((d) => d.games)
+    .filter((g) => g.status.abstractGameState === 'Final')
+    .sort((a, b) => b.gameDate.localeCompare(a.gameDate));
+  return games[0] ?? null;
+}
+
 /** Remaining schedule for a team this season — Monte Carlo input. */
 export async function getRemainingSchedule(teamId: number, season?: number): Promise<ScheduleGame[]> {
   const s = season ?? new Date().getFullYear();

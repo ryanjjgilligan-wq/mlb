@@ -18,9 +18,23 @@ export const viewport: Viewport = {
   initialScale: 1,
 };
 
+const themeScript = `
+try {
+  var t = localStorage.getItem('diamondiq:theme') || 'system';
+  var isDark = t === 'dark' || (t === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  var r = document.documentElement;
+  r.classList.toggle('dark', isDark);
+  r.classList.toggle('light', !isDark);
+  r.style.colorScheme = isDark ? 'dark' : 'light';
+} catch (e) {}
+`;
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${inter.variable} ${mono.variable} dark`}>
+    <html lang="en" className={`${inter.variable} ${mono.variable} dark`} suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+      </head>
       <body className="min-h-screen flex flex-col antialiased">
         <Nav />
         <main className="flex-1">{children}</main>

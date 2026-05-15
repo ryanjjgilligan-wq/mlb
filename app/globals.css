@@ -4,53 +4,99 @@
 
 @layer base {
   :root {
+    --bg: #0a0a0b;
+    --bg-raised: #101013;
+    --bg-sunken: #070708;
+    --bg-panel: #0f0f12;
+    --bg-hover: #16161a;
+    --line: #1f1f24;
+    --line-strong: #2a2a31;
+    --line-subtle: #161619;
+    --ink: #e8e8ec;
+    --ink-muted: #9a9aa3;
+    --ink-subtle: #62626b;
+    --ink-faint: #3a3a42;
+    --invert-team-logo: 1;
+    --accent: #facc15;
+    --accent-dim: #a3850f;
+    --selection: #facc1533;
     color-scheme: dark;
   }
 
+  :root.light {
+    --bg: #fafaf9;
+    --bg-raised: #ffffff;
+    --bg-sunken: #f4f4f3;
+    --bg-panel: #ffffff;
+    --bg-hover: #f0efee;
+    --line: #e5e4e1;
+    --line-strong: #d4d3cf;
+    --line-subtle: #ededea;
+    --ink: #18181b;
+    --ink-muted: #57575c;
+    --ink-subtle: #87878d;
+    --ink-faint: #b4b4b8;
+    --invert-team-logo: 0;
+    --accent: #b45309; /* darker amber readable on white */
+    --accent-dim: #92400e;
+    --selection: #fbbf2444;
+    color-scheme: light;
+  }
+
   html, body {
-    background: #0a0a0b;
-    color: #e8e8ec;
+    background: var(--bg);
+    color: var(--ink);
     -webkit-font-smoothing: antialiased;
   }
 
-  /* Tabular figures everywhere — numbers are the protagonist */
   .num, table, tbody, thead, th, td, .mono {
     font-variant-numeric: tabular-nums;
     font-feature-settings: 'tnum' 1, 'ss01' 1;
   }
 
-  ::selection {
-    background: #facc1533;
-    color: #fff;
-  }
+  ::selection { background: var(--selection); }
 
-  /* Scrollbars — minimal */
   ::-webkit-scrollbar { width: 10px; height: 10px; }
   ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: #1f1f24; border-radius: 6px; }
-  ::-webkit-scrollbar-thumb:hover { background: #2a2a31; }
+  ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 6px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--line-strong); }
 }
 
 @layer components {
   .panel {
-    @apply bg-bg-panel border border-line rounded-md;
+    background: var(--bg-panel);
+    border: 1px solid var(--line);
+    @apply rounded-md;
   }
   .panel-flush {
-    @apply bg-bg-raised border border-line;
+    background: var(--bg-raised);
+    border: 1px solid var(--line);
   }
   .label-micro {
-    @apply text-2xs uppercase tracking-micro text-ink-muted font-medium;
+    @apply text-2xs uppercase tracking-micro font-medium;
+    color: var(--ink-muted);
   }
   .stat-num {
     @apply font-mono tabular-nums tracking-tight;
   }
   .row-hover {
-    @apply hover:bg-bg-hover transition-colors;
+    transition: background-color 120ms ease;
+  }
+  .row-hover:hover {
+    background: var(--bg-hover);
   }
   .divider-x {
-    @apply border-t border-line;
+    border-top: 1px solid var(--line);
   }
   .kbd {
-    @apply font-mono text-2xs px-1.5 py-0.5 rounded border border-line bg-bg-raised text-ink-muted;
+    @apply font-mono text-2xs px-1.5 py-0.5 rounded;
+    border: 1px solid var(--line);
+    background: var(--bg-raised);
+    color: var(--ink-muted);
+  }
+
+  /* Team logos use light cap-on-light SVGs; invert ONLY in dark mode. */
+  .team-logo {
+    filter: invert(var(--invert-team-logo, 1));
   }
 }
