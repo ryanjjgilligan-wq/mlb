@@ -17,6 +17,9 @@ import {
 } from '@/lib/mlb';
 import { blendStats, recencyWeightedFIP } from '@/lib/recency';
 import { computeBullpenFatigue, type BullpenSummary } from '@/lib/bullpen';
+import { LiveAdjustments } from '@/components/LiveAdjustments';
+import { LivePropTracker, type LivePropRow } from '@/components/LivePropTracker';
+import type { LiveGameState } from '@/lib/liveAdjust';
 import { H2HPanel } from '@/components/H2HPanel';
 import { BvPMatrix } from '@/components/BvPMatrix';
 import { Countdown } from '@/components/Countdown';
@@ -294,39 +297,27 @@ export default async function GamePage({ params }: { params: { id: string } }) {
     });
   };
 
-  const awayBatterRows = awayVsHome
-    .map((r) => ({ r, prop: batterPropFor(r.split, homeStarterStats) }))
-    .filter((x) => x.prop)
-    .map(({ r, prop }) => ({
-      name: r.fullName || `#${r.batterId}`,
-      playerId: r.batterId,
-      expected: prop!.expectedHits,
-      label: 'hits',
-      columns: [
-        { key: 'h', label: 'xH', value: prop!.expectedHits.toFixed(2) },
-        { key: 'tb', label: 'xTB', value: prop!.expectedTotalBases.toFixed(2) },
-        { key: 'p1', label: '≥1 H', value: `${(prop!.pHit1Plus * 100).toFixed(0)}%` },
-        { key: 'p2', label: '≥2 H', value: `${(prop!.pHit2Plus * 100).toFixed(0)}%` },
-        { key: 'hr', label: 'HR%', value: `${(prop!.pHrAtLeastOne * 100).toFixed(1)}%` },
-      ],
-    }));
+  const buildBatterRows = (matchups: typeof awayVsHome, oppStarter: any) =>
+    matchups
+      .map((r) => ({ r, prop: batterPropFor(r.split, oppStarter) }))
+      .filter((x): x is { r: typeof matchups[number]; prop: NonNullable<ReturnType<typeof batterPropFor>> } => !!x.prop)
+      .map(({ r, prop }) => ({
+        name: r.fullName || `#${r.batterId}`,
+        playerId: r.batterId,
+        prop, // keep original BatterProp for live tracking
+        expected: prop.expectedHits,
+        label: 'hits',
+        columns: [
+          { key: 'h', label: 'xH', value: prop.expectedHits.toFixed(2) },
+          { key: 'tb', label: 'xTB', value: prop.expectedTotalBases.toFixed(2) },
+          { key: 'p1', label: '≥1 H', value: `${(prop.pHit1Plus * 100).toFixed(0)}%` },
+          { key: 'p2', label: '≥2 H', value: `${(prop.pHit2Plus * 100).toFixed(0)}%` },
+          { key: 'hr', label: 'HR%', value: `${(prop.pHrAtLeastOne * 100).toFixed(1)}%` },
+        ],
+      }));
 
-  const homeBatterRows = homeVsAway
-    .map((r) => ({ r, prop: batterPropFor(r.split, awayStarterStats) }))
-    .filter((x) => x.prop)
-    .map(({ r, prop }) => ({
-      name: r.fullName || `#${r.batterId}`,
-      playerId: r.batterId,
-      expected: prop!.expectedHits,
-      label: 'hits',
-      columns: [
-        { key: 'h', label: 'xH', value: prop!.expectedHits.toFixed(2) },
-        { key: 'tb', label: 'xTB', value: prop!.expectedTotalBases.toFixed(2) },
-        { key: 'p1', label: '≥1 H', value: `${(prop!.pHit1Plus * 100).toFixed(0)}%` },
-        { key: 'p2', label: '≥2 H', value: `${(prop!.pHit2Plus * 100).toFixed(0)}%` },
-        { key: 'hr', label: 'HR%', value: `${(prop!.pHrAtLeastOne * 100).toFixed(1)}%` },
-      ],
-    }));
+  const awayBatterRows = buildBatterRows(awayVsHome, homeStarterStats);
+  const homeBatterRows = buildBatterRows(homeVsAway, awayStarterStats);
 
   // Pitcher K props for each starter
   const pitcherPropFor = (starter: any, oppLineupSplits: Array<{ split: any }>) => {
@@ -450,6 +441,37 @@ export default async function GamePage({ params }: { params: { id: string } }) {
           <TeamColumn team={home} score={linescore?.teams?.home?.runs} side="home" reverse />
         </div>
       </div>
+
+      {/* Live in-game adjustments — only render when game is in progress */}
+      {isLive && linescore && (
+        <Panel
+          title={
+            <span className="flex items-center gap-2">
+              Live in-game projections
+              <Badge variant="neg" pulse>LIVE</Badge>
+            </span>
+          }
+          subtitle="Pre-game model recomputed against actual game state · refreshes every 15s"
+        >
+          <LiveAdjustments
+            state={{
+              inning: linescore.currentInning ?? 0,
+              isTopInning: !!linescore.isTopInning,
+              outs: linescore.outs ?? 0,
+              awayRuns: linescore.teams?.away?.runs ?? 0,
+              homeRuns: linescore.teams?.home?.runs ?? 0,
+              innings: (linescore.innings ?? []).map((i: any) => ({
+                num: i.num,
+                away: { runs: i.away?.runs },
+                home: { runs: i.home?.runs },
+              })),
+            } as LiveGameState}
+            preGameTotal={runTotal.expectedTotal}
+            preGameNRFI={first5.pNRFI}
+            preGameF5Total={first5.expectedTotal}
+          />
+        </Panel>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
         {/* Pre-game projection (always shown, marked clearly) */}
@@ -732,6 +754,56 @@ export default async function GamePage({ params }: { params: { id: string } }) {
             </table>
           </Panel>
         )}
+
+        {/* Live prop tracker — only when game is in progress and we have batter projections */}
+        {isLive && boxscore && (awayBatterRows.length > 0 || homeBatterRows.length > 0) && (() => {
+          const buildLiveRows = (
+            rows: typeof awayBatterRows,
+            teamBlock: any
+          ): LivePropRow[] =>
+            rows.map((row) => {
+              const player = teamBlock?.players?.[`ID${row.playerId}`];
+              const s = player?.stats?.batting ?? {};
+              return {
+                batterId: row.playerId,
+                batterName: row.name,
+                predicted: row.prop,
+                actual: {
+                  pa: Number(s.plateAppearances ?? 0),
+                  ab: Number(s.atBats ?? 0),
+                  hits: Number(s.hits ?? 0),
+                  doubles: Number(s.doubles ?? 0),
+                  homeRuns: Number(s.homeRuns ?? 0),
+                  walks: Number(s.baseOnBalls ?? 0),
+                  strikeouts: Number(s.strikeOuts ?? 0),
+                  totalBases: Number(s.totalBases ?? 0),
+                },
+              };
+            });
+
+          const liveAway = buildLiveRows(awayBatterRows, boxscore.teams?.away);
+          const liveHome = buildLiveRows(homeBatterRows, boxscore.teams?.home);
+          const inningsCompleted = (linescore?.currentInning ?? 0) - (linescore?.isTopInning ? 1 : 0);
+
+          return (
+            <Panel
+              className="lg:col-span-12"
+              title={
+                <span className="flex items-center gap-2">
+                  Live batter props vs projection
+                  <Badge variant="neg" pulse>LIVE</Badge>
+                </span>
+              }
+              subtitle="Each batter's actual line vs the model's projection · green = exceeding · red = behind · K column inverted"
+              flush
+            >
+              <div className="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-line">
+                <LivePropTracker rows={liveAway} teamName={away.teamName} inningsCompleted={inningsCompleted} />
+                <LivePropTracker rows={liveHome} teamName={home.teamName} inningsCompleted={inningsCompleted} />
+              </div>
+            </Panel>
+          );
+        })()}
 
         {/* Player props — batters */}
         {(awayBatterRows.length > 0 || homeBatterRows.length > 0) && (
