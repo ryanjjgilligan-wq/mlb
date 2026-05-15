@@ -310,44 +310,95 @@ function gradeOpportunity(
   impliedSide?: 'home' | 'away'
 ): { result: OpportunityResult; actualText?: string } {
   if (g.status === 'preview' || !g.actual) return { result: 'pending' };
-  if (g.status === 'live') {
-    return { result: 'live', actualText: `Live: ${g.actual.total} R through ${g.actual.inningsCompleted} inn` };
-  }
-  // Final
+
   const actual = g.actual.total;
   const projected = g.prediction.expectedTotal;
+  const innings = g.actual.inningsCompleted;
+  const remaining = Math.max(0, 9 - innings);
+  const pace = innings > 0 ? (actual / innings) * 9 : projected;
+  const homeWon = g.actual.homeRuns > g.actual.awayRuns;
+  const isFinal = g.status === 'final';
+
+  // Each category gets an actualText tailored to what the prediction is
+  // actually about — total-high opps surface pace and runs needed, mismatch
+  // opps surface the score + winner, travel opps surface the away/home line.
   switch (category) {
     case 'total-high':
     case 'shootout':
     case 'park':
     case 'weather': {
-      // Projected high → we wanted the OVER. Use Math.floor(projected) + 0.5 as the implied line.
-      // For low projected categories the implied line is set via "low" branch.
-      // We'll handle low ones in their own branches; for these "high" categories
-      // we treat projected − 1.5 as the line we'd take the over at.
-      const line = Math.floor(projected) - 0.5; // safety margin
-      const hit = actual > line;
-      return { result: hit ? 'hit' : 'miss', actualText: `Final ${actual} R · proj ${projected.toFixed(1)}` };
+      // OVER bias: at least Math.floor(projected) − 0.5 is what we'd take
+      const line = Math.max(7.5, Math.floor(projected) - 0.5);
+      if (isFinal) {
+        const hit = actual > line;
+        return {
+          result: hit ? 'hit' : 'miss',
+          actualText: `Final ${actual} R · over ${line.toFixed(1)} ${hit ? '✓' : '✗'} · proj ${projected.toFixed(1)}`,
+        };
+      }
+      // Live: track pace + how many runs needed
+      const needed = Math.max(0, Math.ceil(line) + 1 - actual);
+      return {
+        result: 'live',
+        actualText:
+          needed === 0
+            ? `Live: ${actual} R through ${innings} inn · over ${line.toFixed(1)} locked`
+            : `Live: ${actual} R through ${innings} inn · pace ${pace.toFixed(1)} · need ${needed} more for over ${line.toFixed(1)}`,
+      };
     }
     case 'total-low':
     case 'k-matchup': {
-      const line = Math.ceil(projected) + 0.5;
-      const hit = actual < line;
-      return { result: hit ? 'hit' : 'miss', actualText: `Final ${actual} R · proj ${projected.toFixed(1)}` };
+      // UNDER bias
+      const line = Math.min(10.5, Math.ceil(projected) + 0.5);
+      if (isFinal) {
+        const hit = actual < line;
+        return {
+          result: hit ? 'hit' : 'miss',
+          actualText: `Final ${actual} R · under ${line.toFixed(1)} ${hit ? '✓' : '✗'} · proj ${projected.toFixed(1)}`,
+        };
+      }
+      const cushion = Math.max(0, line - actual);
+      return {
+        result: 'live',
+        actualText:
+          actual >= line
+            ? `Live: ${actual} R through ${innings} inn · over ${line.toFixed(1)} (under busted)`
+            : `Live: ${actual} R through ${innings} inn · ${cushion.toFixed(0)} R cushion · pace ${pace.toFixed(1)}`,
+      };
     }
     case 'mismatch': {
-      const homeWon = g.actual.homeRuns > g.actual.awayRuns;
-      if (impliedSide === 'home') {
-        return { result: homeWon ? 'hit' : 'miss', actualText: `Final ${g.actual.awayRuns}–${g.actual.homeRuns}` };
-      } else if (impliedSide === 'away') {
-        return { result: !homeWon ? 'hit' : 'miss', actualText: `Final ${g.actual.awayRuns}–${g.actual.homeRuns}` };
+      const diff = g.actual.homeRuns - g.actual.awayRuns;
+      const lead =
+        diff === 0 ? 'tied' :
+        diff > 0 ? `home leads by ${diff}` : `away leads by ${-diff}`;
+      if (isFinal) {
+        if (impliedSide === 'home') {
+          return { result: homeWon ? 'hit' : 'miss', actualText: `Final ${g.actual.awayRuns}–${g.actual.homeRuns} · home ${homeWon ? 'won ✓' : 'lost ✗'}` };
+        } else if (impliedSide === 'away') {
+          return { result: !homeWon ? 'hit' : 'miss', actualText: `Final ${g.actual.awayRuns}–${g.actual.homeRuns} · away ${!homeWon ? 'won ✓' : 'lost ✗'}` };
+        }
+        return { result: 'no-grade', actualText: `Final ${g.actual.awayRuns}–${g.actual.homeRuns}` };
       }
-      return { result: 'no-grade', actualText: `Final ${g.actual.awayRuns}–${g.actual.homeRuns}` };
+      // Live: who's leading + score + innings remaining
+      return {
+        result: 'live',
+        actualText: `Live: ${g.actual.awayRuns}–${g.actual.homeRuns} · ${lead} · ${remaining} inn left`,
+      };
     }
     case 'travel': {
-      // Travel disadvantages the visitor → we'd lean home ML
-      const homeWon = g.actual.homeRuns > g.actual.awayRuns;
-      return { result: homeWon ? 'hit' : 'miss', actualText: `Final ${g.actual.awayRuns}–${g.actual.homeRuns}` };
+      // Travel disadvantages the visitor → away club is the focus
+      if (isFinal) {
+        const awayUnderperformed = g.actual.awayRuns < g.actual.homeRuns;
+        return {
+          result: awayUnderperformed ? 'hit' : 'miss',
+          actualText: `Final · away ${g.actual.awayRuns} R, home ${g.actual.homeRuns} R · away ${awayUnderperformed ? 'under-performed ✓' : 'over-performed ✗'}`,
+        };
+      }
+      const awayPace = innings > 0 ? (g.actual.awayRuns / innings) * 9 : 4.5;
+      return {
+        result: 'live',
+        actualText: `Live: away ${g.actual.awayRuns} R, home ${g.actual.homeRuns} R · away on pace for ${awayPace.toFixed(1)} R`,
+      };
     }
   }
 }

@@ -832,6 +832,18 @@ export default async function GamePage({ params }: { params: { id: string } }) {
             parkName={park.name}
             weatherSummary={weatherSummary}
             travelSummary={travelSummary}
+            actual={
+              (isLive || isFinal) && linescore
+                ? {
+                    awayRuns: linescore.teams?.away?.runs ?? 0,
+                    homeRuns: linescore.teams?.home?.runs ?? 0,
+                    inningsCompleted: (linescore.innings ?? []).filter((i: any) =>
+                      i?.away?.runs !== undefined && i?.home?.runs !== undefined
+                    ).length,
+                    isFinal,
+                  }
+                : undefined
+            }
           />
         </Panel>
 

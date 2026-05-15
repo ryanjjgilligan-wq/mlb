@@ -48,6 +48,21 @@ export function LivePitchSequence({
     );
   }
 
+  // Compute pitch summary stats for the right rail
+  const velocities = pitches.map((p) => p.startSpeed).filter((v): v is number => typeof v === 'number');
+  const avgVelo = velocities.length ? velocities.reduce((s, v) => s + v, 0) / velocities.length : null;
+  const maxVelo = velocities.length ? Math.max(...velocities) : null;
+  const minVelo = velocities.length ? Math.min(...velocities) : null;
+  const callCounts = pitches.reduce((acc, p) => {
+    const desc = (p.description ?? '').toLowerCase();
+    if (desc.includes('ball')) acc.balls++;
+    else if (desc.includes('foul')) acc.fouls++;
+    else if (desc.includes('swinging') || desc.includes('whiff')) acc.whiffs++;
+    else if (p.isInPlay) acc.inPlay++;
+    else acc.calledStrikes++;
+    return acc;
+  }, { balls: 0, calledStrikes: 0, whiffs: 0, fouls: 0, inPlay: 0 });
+
   return (
     <div className="p-4 space-y-4">
       {/* HEADER — matchup name + count tiles inline */}
@@ -65,9 +80,9 @@ export function LivePitchSequence({
         </div>
       </div>
 
-      {/* MAIN — strike zone + silhouette glued together; pitch log fills right */}
-      <div className="grid grid-cols-1 lg:grid-cols-[auto_minmax(0,1fr)] gap-4 items-start">
-        {/* Zone block — single panel containing batter + zone with no dead space */}
+      {/* MAIN — three columns: zone block · pitch table · summary stats */}
+      <div className="grid grid-cols-1 lg:grid-cols-[auto_minmax(0,1fr)_180px] gap-4 items-start">
+        {/* Zone block */}
         <div className="bg-bg-raised rounded-lg border border-line p-3">
           <div className="flex items-end gap-1 justify-center">
             {batterBats === 'L' ? (
@@ -92,36 +107,79 @@ export function LivePitchSequence({
           </div>
         </div>
 
-        {/* Pitch log — fills the right column with consistent cards */}
+        {/* Pitch log — proper TABLE layout, denser than card stack */}
         <div className="min-w-0">
           <div className="flex items-center justify-between mb-2">
             <span className="label-micro">Pitch sequence</span>
             <span className="text-2xs text-ink-faint stat-num">{pitches.length} pitch{pitches.length === 1 ? '' : 'es'}</span>
           </div>
-          <div className="space-y-1.5">
-            {[...pitches].reverse().map((p, i) => (
-              <PitchRow key={p.index} p={p} isLatest={i === 0} />
-            ))}
+          <div className="border border-line rounded-lg overflow-hidden">
+            <table className="w-full text-sm border-collapse">
+              <thead className="bg-bg-raised">
+                <tr className="text-2xs uppercase tracking-micro text-ink-muted">
+                  <th className="text-left font-medium px-3 py-2 w-10">#</th>
+                  <th className="text-left font-medium px-3 py-2">Result</th>
+                  <th className="text-left font-medium px-3 py-2">Pitch</th>
+                  <th className="text-left font-medium px-3 py-2">Velocity</th>
+                  <th className="text-right font-medium px-3 py-2 w-14">MPH</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...pitches].reverse().map((p, i) => (
+                  <PitchRow key={p.index} p={p} isLatest={i === 0} maxVelo={maxVelo ?? 100} minVelo={minVelo ?? 60} />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Summary rail */}
+        <div className="space-y-2">
+          <div>
+            <div className="label-micro mb-1">Velocity</div>
+            <div className="px-3 py-2 rounded border border-line bg-bg-raised">
+              <div className="flex items-baseline gap-1">
+                <span className="stat-num text-xl font-semibold text-ink">{avgVelo ? avgVelo.toFixed(1) : '—'}</span>
+                <span className="text-2xs text-ink-faint">avg mph</span>
+              </div>
+              {minVelo != null && maxVelo != null && (
+                <div className="text-2xs text-ink-faint stat-num mt-0.5">
+                  range {minVelo.toFixed(0)}–{maxVelo.toFixed(0)}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div>
+            <div className="label-micro mb-1">Calls</div>
+            <ul className="space-y-1 px-3 py-2 rounded border border-line bg-bg-raised text-2xs">
+              {[
+                { label: 'Ball', count: callCounts.balls, color: '#dc2626' },
+                { label: 'Called K', count: callCounts.calledStrikes, color: '#16a34a' },
+                { label: 'Whiff', count: callCounts.whiffs, color: '#2563eb' },
+                { label: 'Foul', count: callCounts.fouls, color: '#fb923c' },
+                { label: 'In play', count: callCounts.inPlay, color: '#facc15' },
+              ].filter((r) => r.count > 0).map((r) => (
+                <li key={r.label} className="flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full" style={{ background: r.color }} />
+                    <span className="text-ink-muted">{r.label}</span>
+                  </span>
+                  <span className="stat-num text-ink font-semibold">{r.count}</span>
+                </li>
+              ))}
+            </ul>
           </div>
         </div>
       </div>
 
-      {/* BOTTOM — on-base + color legend in one clean strip */}
-      <div className="flex items-center justify-between gap-4 pt-3 border-t border-line-subtle flex-wrap">
-        <div className="flex items-center gap-3">
-          <BaseDiamond first={!!bases?.first} second={!!bases?.second} third={!!bases?.third} />
-          <div className="flex items-center gap-3 text-2xs">
-            <BaseChip label="1B" name={bases?.first?.name} />
-            <BaseChip label="2B" name={bases?.second?.name} />
-            <BaseChip label="3B" name={bases?.third?.name} />
-          </div>
-        </div>
+      {/* BOTTOM — on-base diamond + chips */}
+      <div className="flex items-center gap-3 pt-3 border-t border-line-subtle">
+        <BaseDiamond first={!!bases?.first} second={!!bases?.second} third={!!bases?.third} />
         <div className="flex items-center gap-3 text-2xs">
-          <LegendDot color="#dc2626" label="Ball" />
-          <LegendDot color="#16a34a" label="Called K" />
-          <LegendDot color="#2563eb" label="Whiff" />
-          <LegendDot color="#fb923c" label="Foul" />
-          <LegendDot color="#facc15" label="In play" />
+          <BaseChip label="1B" name={bases?.first?.name} />
+          <BaseChip label="2B" name={bases?.second?.name} />
+          <BaseChip label="3B" name={bases?.third?.name} />
         </div>
       </div>
     </div>
@@ -213,33 +271,54 @@ function BaseDiamond({ first, second, third }: { first: boolean; second: boolean
   );
 }
 
-function PitchRow({ p, isLatest = false }: { p: LivePitchEvent; isLatest?: boolean }) {
+function PitchRow({
+  p,
+  isLatest = false,
+  maxVelo = 100,
+  minVelo = 60,
+}: {
+  p: LivePitchEvent;
+  isLatest?: boolean;
+  maxVelo?: number;
+  minVelo?: number;
+}) {
   const dotColor = pitchColor(p);
+  const veloRange = Math.max(1, maxVelo - minVelo);
+  const veloPct = p.startSpeed != null ? Math.max(0, Math.min(100, ((p.startSpeed - minVelo) / veloRange) * 100)) : 0;
   return (
-    <div
-      className={`flex items-center gap-3 p-2 rounded border bg-bg-raised ${
-        isLatest ? 'border-accent/40 shadow-[0_0_12px_rgba(250,204,21,0.12)]' : 'border-line'
+    <tr
+      className={`border-t border-line-subtle first:border-0 ${
+        isLatest ? 'bg-accent/5' : 'hover:bg-bg-hover/40'
       }`}
     >
-      <div
-        className="w-7 h-7 rounded-full flex items-center justify-center stat-num text-xs font-bold shrink-0"
-        style={{ background: dotColor, color: '#0a0a0b' }}
-      >
-        {p.index + 1}
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="text-2xs uppercase tracking-micro font-semibold text-ink truncate">
-          {p.description ?? p.call ?? '—'}
+      <td className="px-3 py-2">
+        <div
+          className="w-6 h-6 rounded-full flex items-center justify-center stat-num text-2xs font-bold"
+          style={{ background: dotColor, color: '#0a0a0b' }}
+        >
+          {p.index + 1}
         </div>
-        <div className="text-2xs text-ink-muted truncate">{p.pitchTypeName ?? p.pitchType ?? '—'}</div>
-      </div>
-      {p.startSpeed !== undefined && (
-        <div className="text-right shrink-0">
-          <div className="stat-num text-sm font-semibold text-ink">{p.startSpeed.toFixed(0)}</div>
-          <div className="text-2xs text-ink-faint">MPH</div>
-        </div>
-      )}
-    </div>
+      </td>
+      <td className="px-3 py-2 text-2xs uppercase tracking-micro font-semibold text-ink truncate">
+        {p.description ?? p.call ?? '—'}
+      </td>
+      <td className="px-3 py-2 text-2xs text-ink-muted truncate">{p.pitchTypeName ?? p.pitchType ?? '—'}</td>
+      <td className="px-3 py-2">
+        {p.startSpeed != null ? (
+          <div className="h-1.5 rounded-full bg-bg-sunken overflow-hidden min-w-[60px]">
+            <div
+              className="h-full rounded-full"
+              style={{ width: `${veloPct}%`, background: dotColor }}
+            />
+          </div>
+        ) : (
+          <span className="text-ink-faint">—</span>
+        )}
+      </td>
+      <td className="px-3 py-2 text-right stat-num text-sm font-semibold text-ink">
+        {p.startSpeed != null ? p.startSpeed.toFixed(0) : '—'}
+      </td>
+    </tr>
   );
 }
 

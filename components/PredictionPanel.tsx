@@ -8,6 +8,7 @@ export function RunTotalPanel({
   parkName,
   weatherSummary,
   travelSummary,
+  actual,
 }: {
   output: RunTotalOutput;
   homeName: string;
@@ -15,30 +16,88 @@ export function RunTotalPanel({
   parkName: string;
   weatherSummary?: string;
   travelSummary?: string;
+  /** Actual game state — when present, renders alongside the projection. */
+  actual?: {
+    awayRuns: number;
+    homeRuns: number;
+    inningsCompleted: number;
+    isFinal: boolean;
+  };
 }) {
   const total = output.expectedTotal;
-  const max = Math.max(output.expectedHomeRuns, output.expectedAwayRuns, 5);
+  const max = Math.max(output.expectedHomeRuns, output.expectedAwayRuns, actual?.awayRuns ?? 0, actual?.homeRuns ?? 0, 5);
+  const actualTotal = actual ? actual.awayRuns + actual.homeRuns : null;
+  const totalDelta = actualTotal != null ? actualTotal - total : null;
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-[260px_1fr] gap-6">
       <div className="space-y-3 self-start">
         <div>
           <div className="label-micro">Expected total</div>
-          <div className="stat-num text-3xl font-semibold">{total.toFixed(2)}</div>
+          <div className="flex items-baseline gap-3">
+            <div className="stat-num text-3xl font-semibold">{total.toFixed(2)}</div>
+            {actualTotal != null && (
+              <div className="flex items-baseline gap-1">
+                <span className="text-2xs text-ink-faint uppercase tracking-micro">actual</span>
+                <span className={`stat-num text-2xl font-bold ${
+                  totalDelta != null && Math.abs(totalDelta) >= 1.5
+                    ? totalDelta > 0 ? 'text-signal-pos' : 'text-signal-neg'
+                    : 'text-ink'
+                }`}>{actualTotal}</span>
+                {totalDelta != null && (
+                  <span className={`text-2xs stat-num ${totalDelta > 0 ? 'text-signal-pos' : totalDelta < 0 ? 'text-signal-neg' : 'text-ink-muted'}`}>
+                    ({totalDelta > 0 ? '+' : ''}{totalDelta.toFixed(1)})
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
           <div className="text-2xs text-ink-faint">
             80% CI <span className="stat-num">{output.ci80.low.toFixed(1)}–{output.ci80.high.toFixed(1)}</span>
             <span className="px-1">·</span>
             95% CI <span className="stat-num">{output.ci95.low.toFixed(1)}–{output.ci95.high.toFixed(1)}</span>
+            {actual && !actual.isFinal && (
+              <>
+                <span className="px-1">·</span>
+                <span className="text-signal-warn">{actual.inningsCompleted} inn done</span>
+              </>
+            )}
           </div>
         </div>
         <div className="grid grid-cols-2 gap-3 pt-3 border-t border-line-subtle">
           <div>
             <div className="label-micro">{awayName}</div>
-            <div className="stat-num text-xl font-semibold">{output.expectedAwayRuns.toFixed(2)}</div>
+            <div className="flex items-baseline gap-2">
+              <div className="stat-num text-xl font-semibold">{output.expectedAwayRuns.toFixed(2)}</div>
+              {actual && (
+                <div className="flex items-baseline gap-1">
+                  <span className="text-2xs text-ink-faint">·</span>
+                  <span className={`stat-num text-base font-bold ${
+                    actual.awayRuns > output.expectedAwayRuns + 1 ? 'text-signal-pos' :
+                    actual.awayRuns < output.expectedAwayRuns - 1 ? 'text-signal-neg' :
+                    'text-ink'
+                  }`}>{actual.awayRuns}</span>
+                  <span className="text-2xs text-ink-faint">actual</span>
+                </div>
+              )}
+            </div>
           </div>
           <div>
             <div className="label-micro">{homeName}</div>
-            <div className="stat-num text-xl font-semibold">{output.expectedHomeRuns.toFixed(2)}</div>
+            <div className="flex items-baseline gap-2">
+              <div className="stat-num text-xl font-semibold">{output.expectedHomeRuns.toFixed(2)}</div>
+              {actual && (
+                <div className="flex items-baseline gap-1">
+                  <span className="text-2xs text-ink-faint">·</span>
+                  <span className={`stat-num text-base font-bold ${
+                    actual.homeRuns > output.expectedHomeRuns + 1 ? 'text-signal-pos' :
+                    actual.homeRuns < output.expectedHomeRuns - 1 ? 'text-signal-neg' :
+                    'text-ink'
+                  }`}>{actual.homeRuns}</span>
+                  <span className="text-2xs text-ink-faint">actual</span>
+                </div>
+              )}
+            </div>
           </div>
         </div>
         <div className="pt-3 border-t border-line-subtle">
