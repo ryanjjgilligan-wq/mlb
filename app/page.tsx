@@ -1,5 +1,7 @@
 import Link from 'next/link';
 import { getSchedule, getStandings, getTeams, getTransactions } from '@/lib/mlb';
+import { buildSlateInsights } from '@/lib/insights';
+import { Sparkles } from 'lucide-react';
 import { GameRow } from '@/components/GameRow';
 import { Panel } from '@/components/ui/Panel';
 import { Badge } from '@/components/ui/Badge';
@@ -21,10 +23,11 @@ export default async function HomePage({
   const today = searchParams?.date && /^\d{4}-\d{2}-\d{2}$/.test(searchParams.date)
     ? searchParams.date
     : ymd();
-  const [scheduleToday, standings, transactions] = await Promise.all([
+  const [scheduleToday, standings, transactions, insights] = await Promise.all([
     getSchedule(today).catch(() => []),
     getStandings().catch(() => []),
     getTransactions(5).catch(() => []),
+    buildSlateInsights(today).catch(() => ({ opportunities: [], games: [], date: today })),
   ]);
 
   const games = scheduleToday[0]?.games ?? [];
@@ -90,6 +93,54 @@ export default async function HomePage({
           <Stat label="Teams" value={allTeams.length} size="sm" />
         </div>
       </div>
+
+      {/* Pick of the Day — curated top opportunities */}
+      {insights.opportunities.length > 0 && (
+        <Panel
+          title={
+            <span className="flex items-center gap-2">
+              <Sparkles size={14} className="text-accent" />
+              Picks of the Day
+            </span>
+          }
+          subtitle={`Top ${Math.min(3, insights.opportunities.length)} highest-confidence model edges across today's slate`}
+          actions={
+            <Link href="/opportunities" className="text-2xs text-ink-muted hover:text-ink uppercase tracking-micro">
+              all opportunities →
+            </Link>
+          }
+          flush
+        >
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-px bg-line">
+            {insights.opportunities.slice(0, 3).map((o, i) => (
+              <Link
+                key={`${o.category}-${o.gamePk}-${i}`}
+                href={`/game/${o.gamePk}`}
+                className="bg-bg-panel hover:bg-bg-hover transition-colors p-4 flex flex-col gap-2"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <Badge variant={
+                    o.category === 'shootout' || o.category === 'total-high' ? 'pos' :
+                    o.category === 'total-low' || o.category === 'weather' ? 'info' :
+                    o.category === 'k-matchup' ? 'accent' :
+                    o.category === 'mismatch' ? 'warn' : 'neutral'
+                  }>{o.metric}</Badge>
+                  <span className={`text-2xs uppercase tracking-micro ${
+                    o.confidence === 'high' ? 'text-signal-pos' : 'text-signal-info'
+                  }`}>{o.confidence} · {o.confidenceScore}</span>
+                </div>
+                <h3 className="text-sm font-semibold text-ink leading-snug">{o.headline}</h3>
+                <p className="text-2xs text-ink-faint">{o.subline}</p>
+                <p className="text-2xs text-ink-muted mt-1 line-clamp-3">{o.explanation}</p>
+                <div className="mt-auto pt-2 flex items-center justify-between text-2xs text-ink-faint">
+                  <span className="stat-num">{o.gameLabel}</span>
+                  <span>open game →</span>
+                </div>
+              </Link>
+            ))}
+          </div>
+        </Panel>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
         {/* Today's slate */}

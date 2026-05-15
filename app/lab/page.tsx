@@ -147,6 +147,38 @@ export default function LabPage() {
           ]}
         />
         <Section
+          name="Recency-weighted projections"
+          status="solid"
+          formula={
+            "Blended stat = recent · 0.5 + mid · 0.3 + season · 0.2 (weights renormalize when a window is missing)\n" +
+            "Team windows: last-15 games, last-30 games, full season\n" +
+            "Starter windows: last-4 starts, last-8 starts, full season\n" +
+            "Counting stats are weight-summed; rates derive from blended counts (mathematically consistent, not pre-blended rates)"
+          }
+          source="Standard sharp-bettor practice — recent samples are dramatically more predictive than season-aggregate samples for in-season projections."
+          notes={[
+            "Without recency weighting, an April-strong / June-cold pitcher's projection is dragged up by stale data.",
+            'lastXGames endpoint of MLB Stats API supplies the windowed aggregates — single call per window, cached 30m.',
+            '8 unit tests verify weight normalization, stat-shape preservation, IP-thirds parsing, FIP recomputation on blended counts.',
+            'Applied automatically on the game page Run total panel and across /opportunities, /first5, /nrfi when last-N data is available.',
+          ]}
+        />
+        <Section
+          name="Bullpen fatigue score"
+          status="solid"
+          formula={
+            "Per-pitcher: Fresh ≤25 P 3d & not yesterday; Tired ≤55 P 3d or pitched yesterday; Gassed >55 P 3d or back-to-back days\n" +
+            "Team fatigue (0–100): 100 − min(60, totalPitches3d/4) − 8·gassed − 3·tired\n" +
+            "Starters auto-excluded (any single-day workload ≥70 pitches treated as starter, not bullpen arm)"
+          }
+          source="Box-score derived; reliever workload literature consistently shows ~0.4 R/9 degradation in heavily worked bullpens."
+          notes={[
+            'Pulls last 3 days of finals via getScheduleRange + per-game getGameBoxscore in parallel.',
+            'Surfaces on team pages as a full panel and on game pages as a side-by-side comparison.',
+            'Real edge for over/under and late-inning props — gassed pens leak runs in the 6th–9th.',
+          ]}
+        />
+        <Section
           name="First 5 innings (F5) prediction"
           status="baseline"
           formula={
@@ -322,6 +354,11 @@ export default function LabPage() {
           <li>Recent-transactions wire on the home page (last 5 days, MLB /transactions)</li>
           <li>Markov-chain lineup expected-runs simulator (lib/markov.ts) + heuristic optimizer</li>
           <li>First 5 innings (F5) sub-game predictor with starter-anchored projections, NRFI prob, and over/under lines</li>
+          <li>Recency-weighted projections — last-15/30 game team rates + last-4-start starter FIP blended with season (50/30/20 default weights)</li>
+          <li>Bullpen fatigue tracker — 3-day pitches, back-to-back days, fatigue score 0–100, per-team and per-pitcher status (fresh/tired/gassed)</li>
+          <li>NRFI / YRFI dedicated edge page with sorted top-10 lists for each side</li>
+          <li>Picks of the Day strip on the home page — top 3 highest-confidence opportunities</li>
+          <li>Multi-entity Compare with shareable URLs (up to 4 players or 4 teams, hitter/pitcher/team modes)</li>
         </ul>
       </Panel>
 

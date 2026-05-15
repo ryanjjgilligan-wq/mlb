@@ -358,6 +358,47 @@ export async function getBatterVsPitcher(batterId: number, pitcherId: number): P
 }
 
 /** Monthly splits — `byMonth` returns one row per calendar month played. */
+/**
+ * Last-N-games aggregated team stats. Returns a single split with the team's
+ * combined hitting or pitching line over the last N games. Uses the
+ * `lastXGames` stats type which is the API's native rolling-window endpoint.
+ */
+export async function getTeamLastXGamesHitting(teamId: number, n: number, season?: number): Promise<Record<string, any> | null> {
+  const s = season ?? new Date().getFullYear();
+  const data = await get<any>(
+    `/teams/${teamId}/stats?stats=lastXGames&group=hitting&season=${s}&numberOfGames=${n}`,
+    { revalidate: 1800 }
+  ).catch(() => null);
+  return data?.stats?.[0]?.splits?.[0]?.stat ?? null;
+}
+
+export async function getTeamLastXGamesPitching(teamId: number, n: number, season?: number): Promise<Record<string, any> | null> {
+  const s = season ?? new Date().getFullYear();
+  const data = await get<any>(
+    `/teams/${teamId}/stats?stats=lastXGames&group=pitching&season=${s}&numberOfGames=${n}`,
+    { revalidate: 1800 }
+  ).catch(() => null);
+  return data?.stats?.[0]?.splits?.[0]?.stat ?? null;
+}
+
+/**
+ * Last-N-games aggregated stats for a single player.
+ * For pitchers, "games" = appearances (or starts if you filter upstream).
+ */
+export async function getPlayerLastXGames(
+  id: number,
+  group: 'hitting' | 'pitching',
+  n: number,
+  season?: number
+): Promise<Record<string, any> | null> {
+  const s = season ?? new Date().getFullYear();
+  const data = await get<any>(
+    `/people/${id}/stats?stats=lastXGames&group=${group}&season=${s}&numberOfGames=${n}`,
+    { revalidate: 1800 }
+  ).catch(() => null);
+  return data?.stats?.[0]?.splits?.[0]?.stat ?? null;
+}
+
 export async function getTeamMonthlyHitting(teamId: number, season?: number): Promise<any[]> {
   const s = season ?? new Date().getFullYear();
   const data = await get<any>(

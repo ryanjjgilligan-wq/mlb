@@ -13,10 +13,14 @@ import {
   getGameLive,
   getPlayerSeasonStats,
   getLastGameForTeam,
+  getTeamLastXGamesHitting,
+  getTeamLastXGamesPitching,
+  getPlayerLastXGames,
   type ScheduleGame,
 } from './mlb';
 import { getPark, haversineMiles } from './parks';
 import { fip, parseInnings } from './saber';
+import { blendStats, recencyWeightedFIP } from './recency';
 import {
   predictRunTotal,
   type RunTotalInput,
@@ -89,7 +93,13 @@ async function buildGameInsight(
   const home = game.teams.home.team;
   const away = game.teams.away.team;
 
-  const [feed, awayLast, awayStarterStats, homeStarterStats] = await Promise.all([
+  const [
+    feed, awayLast,
+    awayStarterStats, homeStarterStats,
+    awayStarterLast4, homeStarterLast4,
+    awayHitL15, awayHitL30, awayPitL15, awayPitL30,
+    homeHitL15, homeHitL30, homePitL15, homePitL30,
+  ] = await Promise.all([
     getGameLive(game.gamePk).catch(() => null),
     getLastGameForTeam(away.id, date).catch(() => null),
     game.teams.away.probablePitcher?.id
@@ -98,6 +108,20 @@ async function buildGameInsight(
     game.teams.home.probablePitcher?.id
       ? getPlayerSeasonStats(game.teams.home.probablePitcher.id, 'pitching').catch(() => null)
       : Promise.resolve(null),
+    game.teams.away.probablePitcher?.id
+      ? getPlayerLastXGames(game.teams.away.probablePitcher.id, 'pitching', 4).catch(() => null)
+      : Promise.resolve(null),
+    game.teams.home.probablePitcher?.id
+      ? getPlayerLastXGames(game.teams.home.probablePitcher.id, 'pitching', 4).catch(() => null)
+      : Promise.resolve(null),
+    getTeamLastXGamesHitting(away.id, 15).catch(() => null),
+    getTeamLastXGamesHitting(away.id, 30).catch(() => null),
+    getTeamLastXGamesPitching(away.id, 15).catch(() => null),
+    getTeamLastXGamesPitching(away.id, 30).catch(() => null),
+    getTeamLastXGamesHitting(home.id, 15).catch(() => null),
+    getTeamLastXGamesHitting(home.id, 30).catch(() => null),
+    getTeamLastXGamesPitching(home.id, 15).catch(() => null),
+    getTeamLastXGamesPitching(home.id, 30).catch(() => null),
   ]);
 
   if (!feed) return null;
@@ -124,11 +148,31 @@ async function buildGameInsight(
     return games > 0 ? (rec[key] ?? 0) / games : 4.5;
   };
 
-  const starterInput = (sp: any) => {
-    if (!sp?.stat) return undefined;
-    const computedFip = fip(sp.stat);
-    const ip = parseInnings(sp.stat.inningsPitched);
-    const gs = Number(sp.stat.gamesStarted) || Number(sp.stat.gamesPlayed) || 1;
+  // Recency-blended team rates
+  const seasonOff = (rec: any) => rec ? { runs: rec.runsScored ?? 0, gamesPlayed: rec.wins + rec.losses } : null;
+  const seasonDef = (rec: any) => rec ? { runs: rec.runsAllowed ?? 0, gamesPlayed: rec.wins + rec.losses } : null;
+  const blendRPG = (l15: any, l30: any, season: any): number | null => {
+    const b = blendStats(l15, l30, season);
+    const g = Number(b.gamesPlayed) || 0;
+    const r = Number(b.runs) || 0;
+    return g > 0 ? r / g : null;
+  };
+
+  const homeRS = blendRPG(homeHitL15, homeHitL30, seasonOff(homeRec)) ?? teamRate(homeRec, 'runsScored');
+  const awayRS = blendRPG(awayHitL15, awayHitL30, seasonOff(awayRec)) ?? teamRate(awayRec, 'runsScored');
+  const homeRA = blendRPG(homePitL15, homePitL30, seasonDef(homeRec)) ?? teamRate(homeRec, 'runsAllowed');
+  const awayRA = blendRPG(awayPitL15, awayPitL30, seasonDef(awayRec)) ?? teamRate(awayRec, 'runsAllowed');
+
+  const starterInput = (season: any, last4: any) => {
+    if (!season?.stat && !last4) return undefined;
+    if (last4) {
+      const blended = recencyWeightedFIP(last4, null, season?.stat ?? null);
+      if (blended.fip != null) return { fip: blended.fip, ipPerStart: blended.ipPerStart ?? 5.5 };
+    }
+    if (!season?.stat) return undefined;
+    const computedFip = fip(season.stat);
+    const ip = parseInnings(season.stat.inningsPitched);
+    const gs = Number(season.stat.gamesStarted) || Number(season.stat.gamesPlayed) || 1;
     return {
       fip: Number.isFinite(computedFip) && computedFip > 0 ? computedFip : undefined,
       ipPerStart: gs > 0 ? Math.min(7, Math.max(3, ip / gs)) : 5.5,
@@ -136,10 +180,10 @@ async function buildGameInsight(
   };
 
   const input: RunTotalInput = {
-    home: { teamId: home.id, runsScoredPerGame: teamRate(homeRec, 'runsScored'), runsAllowedPerGame: teamRate(homeRec, 'runsAllowed') },
-    away: { teamId: away.id, runsScoredPerGame: teamRate(awayRec, 'runsScored'), runsAllowedPerGame: teamRate(awayRec, 'runsAllowed') },
-    homeStarter: starterInput(homeStarterStats),
-    awayStarter: starterInput(awayStarterStats),
+    home: { teamId: home.id, runsScoredPerGame: homeRS, runsAllowedPerGame: homeRA },
+    away: { teamId: away.id, runsScoredPerGame: awayRS, runsAllowedPerGame: awayRA },
+    homeStarter: starterInput(homeStarterStats, homeStarterLast4),
+    awayStarter: starterInput(awayStarterStats, awayStarterLast4),
     park,
     weather,
     travel: { awayTravelMiles, awayDaysRest: undefined, homeDaysRest: undefined },

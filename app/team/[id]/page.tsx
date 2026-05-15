@@ -14,6 +14,8 @@ import {
   playerHeadshotUrl,
 } from '@/lib/mlb';
 import { Countdown } from '@/components/Countdown';
+import { BullpenPanel } from '@/components/BullpenPanel';
+import { computeBullpenFatigue } from '@/lib/bullpen';
 import { Panel } from '@/components/ui/Panel';
 import { Stat } from '@/components/ui/Stat';
 import { Badge } from '@/components/ui/Badge';
@@ -47,7 +49,7 @@ export default async function TeamPage({ params }: { params: { id: string } }) {
   const start = shiftYmd(today, -3);
   const end = shiftYmd(today, 10);
 
-  const [team, roster, stats, standings, scheduleRange, remainingSchedule, injuries, monthlyHit, monthlyPit] = await Promise.all([
+  const [team, roster, stats, standings, scheduleRange, remainingSchedule, injuries, monthlyHit, monthlyPit, bullpen] = await Promise.all([
     getTeam(id),
     getRoster(id).catch(() => []),
     getTeamStats(id).catch(() => []),
@@ -57,6 +59,7 @@ export default async function TeamPage({ params }: { params: { id: string } }) {
     getInjuryList(id).catch(() => []),
     getTeamMonthlyHitting(id).catch(() => []),
     getTeamMonthlyPitching(id).catch(() => []),
+    computeBullpenFatigue(id).catch(() => null),
   ]);
 
   if (!team) notFound();
@@ -206,6 +209,25 @@ export default async function TeamPage({ params }: { params: { id: string } }) {
             />
           </div>
         </Panel>
+
+        {/* Bullpen fatigue */}
+        {bullpen && (
+          <Panel
+            className="lg:col-span-12"
+            title={
+              <span className="flex items-center gap-2">
+                Bullpen fatigue
+                <span className="text-2xs px-1.5 py-0.5 rounded border border-accent/30 bg-accent/5 text-accent uppercase tracking-micro">
+                  3-day window
+                </span>
+              </span>
+            }
+            subtitle="Who's available today, who's gassed · derived from last 3 days of box scores"
+            flush
+          >
+            <BullpenPanel summary={bullpen} teamName={team.name} />
+          </Panel>
+        )}
 
         {/* Monthly splits — by-month for hitting and pitching */}
         {(monthlyHit.length > 0 || monthlyPit.length > 0) && (

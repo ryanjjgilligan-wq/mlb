@@ -9,9 +9,14 @@ import {
   getLastGameForTeam,
   getHeadToHeadSchedule,
   getBatterVsPitcher,
+  getTeamLastXGamesHitting,
+  getTeamLastXGamesPitching,
+  getPlayerLastXGames,
   teamCapLogoUrl,
   playerHeadshotUrl,
 } from '@/lib/mlb';
+import { blendStats, recencyWeightedFIP } from '@/lib/recency';
+import { computeBullpenFatigue, type BullpenSummary } from '@/lib/bullpen';
 import { H2HPanel } from '@/components/H2HPanel';
 import { BvPMatrix } from '@/components/BvPMatrix';
 import { Countdown } from '@/components/Countdown';
@@ -91,9 +96,11 @@ export default async function GamePage({ params }: { params: { id: string } }) {
     }));
   }
 
-  const [awayVsHome, homeVsAway] = await Promise.all([
+  const [awayVsHome, homeVsAway, awayBullpen, homeBullpen] = await Promise.all([
     pullMatchups(awayBatters, homeStartHand),
     pullMatchups(homeBatters, awayStartHand),
+    computeBullpenFatigue(away.id).catch(() => null),
+    computeBullpenFatigue(home.id).catch(() => null),
   ]);
 
   // Head-to-head (current + prior season) and per-batter vs starter career line
@@ -155,18 +162,45 @@ export default async function GamePage({ params }: { params: { id: string } }) {
     return games > 0 ? (rec[key] ?? 0) / games : 4.5;
   };
 
-  // Starter inputs: pull each starter's season pitching line for FIP + IP
-  const [awayStarterStats, homeStarterStats] = await Promise.all([
+  // Starter inputs: season + last-4-starts + last-8-starts → blend
+  const [awayStarterStats, homeStarterStats, awayStarterLast4, awayStarterLast8, homeStarterLast4, homeStarterLast8] = await Promise.all([
     awayProbable?.id ? getPlayerSeasonStats(awayProbable.id, 'pitching').catch(() => null) : Promise.resolve(null),
     homeProbable?.id ? getPlayerSeasonStats(homeProbable.id, 'pitching').catch(() => null) : Promise.resolve(null),
+    awayProbable?.id ? getPlayerLastXGames(awayProbable.id, 'pitching', 4).catch(() => null) : Promise.resolve(null),
+    awayProbable?.id ? getPlayerLastXGames(awayProbable.id, 'pitching', 8).catch(() => null) : Promise.resolve(null),
+    homeProbable?.id ? getPlayerLastXGames(homeProbable.id, 'pitching', 4).catch(() => null) : Promise.resolve(null),
+    homeProbable?.id ? getPlayerLastXGames(homeProbable.id, 'pitching', 8).catch(() => null) : Promise.resolve(null),
   ]);
-  const starterInput = (sp: any, fallbackFip?: number) => {
-    if (!sp?.stat) return undefined;
-    const computedFip = fip(sp.stat);
-    const ip = parseInnings(sp.stat.inningsPitched);
-    const gs = Number(sp.stat.gamesStarted) || Number(sp.stat.gamesPlayed) || 1;
+
+  // Team recency-weighted offense + defense
+  const [awayTeamLast15Hit, awayTeamLast30Hit, awayTeamLast15Pit, awayTeamLast30Pit,
+         homeTeamLast15Hit, homeTeamLast30Hit, homeTeamLast15Pit, homeTeamLast30Pit] = await Promise.all([
+    getTeamLastXGamesHitting(away.id, 15).catch(() => null),
+    getTeamLastXGamesHitting(away.id, 30).catch(() => null),
+    getTeamLastXGamesPitching(away.id, 15).catch(() => null),
+    getTeamLastXGamesPitching(away.id, 30).catch(() => null),
+    getTeamLastXGamesHitting(home.id, 15).catch(() => null),
+    getTeamLastXGamesHitting(home.id, 30).catch(() => null),
+    getTeamLastXGamesPitching(home.id, 15).catch(() => null),
+    getTeamLastXGamesPitching(home.id, 30).catch(() => null),
+  ]);
+
+  // Use recency-weighted FIP when last-N starts are available
+  const starterInput = (season: any, last4: any, last8: any) => {
+    if (!season?.stat && !last4 && !last8) return undefined;
+    const seasonStat = season?.stat;
+    if (last4 || last8) {
+      const blended = recencyWeightedFIP(last4, last8, seasonStat);
+      if (blended.fip != null) {
+        return { fip: blended.fip, ipPerStart: blended.ipPerStart ?? 5.5 };
+      }
+    }
+    if (!seasonStat) return undefined;
+    const computedFip = fip(seasonStat);
+    const ip = parseInnings(seasonStat.inningsPitched);
+    const gs = Number(seasonStat.gamesStarted) || Number(seasonStat.gamesPlayed) || 1;
     return {
-      fip: Number.isFinite(computedFip) && computedFip > 0 ? computedFip : fallbackFip,
+      fip: Number.isFinite(computedFip) && computedFip > 0 ? computedFip : undefined,
       ipPerStart: gs > 0 ? Math.min(7, Math.max(3, ip / gs)) : 5.5,
     };
   };
@@ -180,19 +214,41 @@ export default async function GamePage({ params }: { params: { id: string } }) {
     ? { name: homePlateUmp.fullName as string, kzBoost: 1, runsModifier: 1 }
     : undefined;
 
+  // Recency-blended team rates (last-15 + last-30 + season)
+  // Build a synthetic season "stat" object so blendStats can mix windows.
+  const seasonOffStat = (rec: any) =>
+    rec ? { runs: rec.runsScored ?? 0, gamesPlayed: rec.wins + rec.losses } : null;
+  const seasonDefStat = (rec: any) =>
+    rec ? { runs: rec.runsAllowed ?? 0, gamesPlayed: rec.wins + rec.losses } : null;
+
+  const blendRPG = (last15: any, last30: any, season: any): number | null => {
+    const blended = blendStats(last15, last30, season);
+    const g = Number(blended.gamesPlayed) || 0;
+    const r = Number(blended.runs) || 0;
+    return g > 0 ? r / g : null;
+  };
+
+  const homeRSWeighted = blendRPG(homeTeamLast15Hit, homeTeamLast30Hit, seasonOffStat(homeRec)) ?? teamRate(homeRec, 'runsScored');
+  const awayRSWeighted = blendRPG(awayTeamLast15Hit, awayTeamLast30Hit, seasonOffStat(awayRec)) ?? teamRate(awayRec, 'runsScored');
+  const homeRAWeighted = blendRPG(homeTeamLast15Pit, homeTeamLast30Pit, seasonDefStat(homeRec)) ?? teamRate(homeRec, 'runsAllowed');
+  const awayRAWeighted = blendRPG(awayTeamLast15Pit, awayTeamLast30Pit, seasonDefStat(awayRec)) ?? teamRate(awayRec, 'runsAllowed');
+
+  const recencyApplied =
+    !!(homeTeamLast15Hit || awayTeamLast15Hit || awayStarterLast4 || homeStarterLast4);
+
   const runTotalInput: RunTotalInput = {
     home: {
       teamId: home.id,
-      runsScoredPerGame: teamRate(homeRec, 'runsScored'),
-      runsAllowedPerGame: teamRate(homeRec, 'runsAllowed'),
+      runsScoredPerGame: homeRSWeighted,
+      runsAllowedPerGame: homeRAWeighted,
     },
     away: {
       teamId: away.id,
-      runsScoredPerGame: teamRate(awayRec, 'runsScored'),
-      runsAllowedPerGame: teamRate(awayRec, 'runsAllowed'),
+      runsScoredPerGame: awayRSWeighted,
+      runsAllowedPerGame: awayRAWeighted,
     },
-    homeStarter: starterInput(homeStarterStats),
-    awayStarter: starterInput(awayStarterStats),
+    homeStarter: starterInput(homeStarterStats, homeStarterLast4, homeStarterLast8),
+    awayStarter: starterInput(awayStarterStats, awayStarterLast4, awayStarterLast8),
     park,
     weather,
     travel: { awayTravelMiles, awayDaysRest, homeDaysRest },
@@ -434,8 +490,21 @@ export default async function GamePage({ params }: { params: { id: string } }) {
         {/* Run total predictor — full transparency on inputs */}
         <Panel
           className="lg:col-span-12"
-          title="Run total prediction"
-          subtitle="Transparent baseline · team RS/RA + starter FIP × park × weather × travel/rest"
+          title={
+            <span className="flex items-center gap-2">
+              Run total prediction
+              {recencyApplied && (
+                <span className="text-2xs px-1.5 py-0.5 rounded border border-signal-pos/30 bg-signal-pos/5 text-signal-pos uppercase tracking-micro">
+                  recency-weighted
+                </span>
+              )}
+            </span>
+          }
+          subtitle={
+            recencyApplied
+              ? 'Last-15/30 game team rates + last-4-start starter FIP blended with season · park × weather × travel/rest × ump'
+              : 'Season team RS/RA + starter FIP × park × weather × travel/rest × ump'
+          }
         >
           <RunTotalPanel
             output={runTotal}
@@ -554,6 +623,70 @@ export default async function GamePage({ params }: { params: { id: string } }) {
             </div>
           </div>
         </Panel>
+
+        {/* Bullpen fatigue comparison — late-innings edge */}
+        {(awayBullpen || homeBullpen) && (
+          <Panel
+            className="lg:col-span-12"
+            title="Bullpen state · 3-day workload"
+            subtitle="Real edge for over/under and late-game props · the gassed pen leaks runs in the 6th–9th"
+            flush
+          >
+            <div className="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-line">
+              {[
+                { name: away.teamName, sum: awayBullpen },
+                { name: home.teamName, sum: homeBullpen },
+              ].map(({ name, sum }) => (
+                <div key={name} className="p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-sm font-medium">{name}</span>
+                    {sum && (
+                      <span className={`stat-num text-sm font-semibold ${
+                        sum.fatigueScore >= 75 ? 'text-signal-pos' :
+                        sum.fatigueScore <= 45 ? 'text-signal-neg' : 'text-ink'
+                      }`}>{sum.fatigueScore}/100</span>
+                    )}
+                  </div>
+                  {!sum ? (
+                    <p className="text-2xs text-ink-faint">No recent bullpen data</p>
+                  ) : (
+                    <>
+                      <div className="grid grid-cols-3 gap-3 mb-3 text-2xs">
+                        <div>
+                          <div className="label-micro">Pitches 3d</div>
+                          <div className="stat-num text-base">{sum.totalPitches3d}</div>
+                        </div>
+                        <div>
+                          <div className="label-micro">Gassed arms</div>
+                          <div className={`stat-num text-base ${sum.gassedCount > 0 ? 'text-signal-neg' : 'text-ink-muted'}`}>{sum.gassedCount}</div>
+                        </div>
+                        <div>
+                          <div className="label-micro">Fresh arms</div>
+                          <div className={`stat-num text-base ${sum.freshCount > 2 ? 'text-signal-pos' : 'text-ink-muted'}`}>{sum.freshCount}</div>
+                        </div>
+                      </div>
+                      {sum.pitchers.slice(0, 5).length > 0 && (
+                        <ul className="text-2xs space-y-1">
+                          {sum.pitchers.slice(0, 5).map((p) => (
+                            <li key={p.id} className="flex items-center gap-2">
+                              <span className={`px-1 rounded text-[9px] uppercase tracking-micro ${
+                                p.status === 'fresh' ? 'bg-signal-pos/10 text-signal-pos' :
+                                p.status === 'tired' ? 'bg-signal-warn/10 text-signal-warn' :
+                                'bg-signal-neg/10 text-signal-neg'
+                              }`}>{p.status}</span>
+                              <Link href={`/player/${p.id}`} className="hover:text-accent flex-1 truncate">{p.name}</Link>
+                              <span className="stat-num text-ink-muted">{p.totalPitches3d}P</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+          </Panel>
+        )}
 
         {/* Player props — pitchers */}
         {(awayStarterProp || homeStarterProp) && (
