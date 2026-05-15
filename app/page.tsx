@@ -1,7 +1,8 @@
 import Link from 'next/link';
 import { getSchedule, getStandings, getTeams, getTransactions } from '@/lib/mlb';
 import { buildSlateInsights } from '@/lib/insights';
-import { Sparkles } from 'lucide-react';
+import { Sparkles, Trophy } from 'lucide-react';
+import { getPicksForDate, aggregate } from '@/lib/picks';
 import { GameRow } from '@/components/GameRow';
 import { Panel } from '@/components/ui/Panel';
 import { Badge } from '@/components/ui/Badge';
@@ -23,12 +24,15 @@ export default async function HomePage({
   const today = searchParams?.date && /^\d{4}-\d{2}-\d{2}$/.test(searchParams.date)
     ? searchParams.date
     : ymd();
-  const [scheduleToday, standings, transactions, insights] = await Promise.all([
+  const yesterday = shiftYmd(today, -1);
+  const [scheduleToday, standings, transactions, insights, yRecap] = await Promise.all([
     getSchedule(today).catch(() => []),
     getStandings().catch(() => []),
     getTransactions(5).catch(() => []),
     buildSlateInsights(today).catch(() => ({ opportunities: [], games: [], date: today })),
+    getPicksForDate(yesterday).catch(() => null),
   ]);
+  const yAgg = yRecap ? aggregate(yRecap.picks) : null;
 
   const games = scheduleToday[0]?.games ?? [];
   const live = games.filter((g) => g.status.abstractGameState === 'Live');
@@ -84,6 +88,16 @@ export default async function HomePage({
           </p>
         </div>
         <div className="flex items-center gap-6">
+          {yAgg && yAgg.total > 0 && (
+            <Link href={`/recap/${yesterday}`} className="flex flex-col items-end gap-0.5 hover:bg-bg-hover rounded px-2 py-1 transition-colors">
+              <span className="label-micro flex items-center gap-1"><Trophy size={10} className="text-accent" /> Yesterday's recap</span>
+              <span className={`stat-num text-sm font-semibold ${
+                yAgg.units > 0 ? 'text-signal-pos' : yAgg.units < 0 ? 'text-signal-neg' : 'text-ink'
+              }`}>
+                {yAgg.wins}-{yAgg.losses} · {yAgg.units >= 0 ? '+' : ''}{yAgg.units.toFixed(1)}u
+              </span>
+            </Link>
+          )}
           <Stat
             label="League AVG R/G"
             value={leagueRPG.toFixed(2)}
