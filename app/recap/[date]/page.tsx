@@ -38,8 +38,6 @@ export default async function RecapPage({ params }: { params: { date: string } }
             <LocalDate ymd={date} className="stat-num" />
             <span className="text-ink-faint">·</span>
             <span>{snap?.picks.length ?? 0} logged picks</span>
-            <span className="text-ink-faint">·</span>
-            <Link href="/track-record" className="hover:text-ink underline">all-time track record →</Link>
           </p>
         </div>
         <div className="flex items-center gap-1 text-2xs">
@@ -57,7 +55,7 @@ export default async function RecapPage({ params }: { params: { date: string } }
         <Panel title={<span className="flex items-center gap-2"><AlertTriangle size={14} className="text-signal-warn" /> Persistent storage not enabled</span>}>
           <p className="text-sm text-ink-muted">
             Picks aren't being persisted yet. Enable Vercel KV from the project's Storage tab to start
-            logging — see <Link href="/track-record" className="underline">/track-record</Link> for setup.
+            logging — enable Vercel KV to persist daily recaps.
           </p>
         </Panel>
       )}
@@ -206,6 +204,6 @@ function buildTweet(date: string, agg: any, bestWin: any, biggestMiss: any): str
     lines.push(`Big miss: ${biggestMiss.gameLabel} · ${biggestMiss.side}${biggestMiss.line != null ? ' ' + biggestMiss.line : ''} → ${biggestMiss.actual}`);
   }
   lines.push('');
-  lines.push(`Full record: diamondiq.com/track-record`);
+  lines.push(`See full slate at diamondiq.com/recap`);
   return lines.join('\n');
 }

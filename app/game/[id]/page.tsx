@@ -535,7 +535,7 @@ export default async function GamePage({ params }: { params: { id: string } }) {
                 <Badge variant="neg" pulse>LIVE</Badge>
               </span>
             }
-            subtitle="Diamond, runners, count, outs, current matchup · refreshes every 15s"
+            subtitle="Diamond, runners, count, outs, current matchup · refreshes every 5s"
           >
             <LiveGameField
               d={{

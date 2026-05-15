@@ -200,23 +200,31 @@ export function predictRunTotal(input: RunTotalInput): RunTotalOutput {
   const pHomeWin = normalCdf(z);
 
   // Confidence — derived from input availability + signal strength.
-  // Higher when: starters known, weather known, both teams have ≥10 games of
-  // sample, talent gap is large (clearer signal). Lower when warnings present.
+  //
+  // Calibrated so a normal preview game with all data lands in the 85–95
+  // range, low-data states drop into 50–70, and only signal-poor games or
+  // multi-warning games fall under 50.
   const reasons: string[] = [];
-  let score = 50;
-  if (input.homeStarter?.fip) { score += 8; reasons.push('home starter FIP known'); }
-  if (input.awayStarter?.fip) { score += 8; reasons.push('away starter FIP known'); }
-  if (input.weather && (input.weather.tempF || input.weather.windSpeedMph)) { score += 6; reasons.push('weather data present'); }
-  if (input.travel && input.travel.awayDaysRest !== undefined) { score += 4; reasons.push('rest known'); }
+  let score = 45;
+  if (input.homeStarter?.fip) { score += 12; reasons.push('home starter FIP known'); }
+  if (input.awayStarter?.fip) { score += 12; reasons.push('away starter FIP known'); }
+  if (input.homeStarter?.ipPerStart && input.homeStarter.ipPerStart > 4) { score += 3; reasons.push('home starter is bulk'); }
+  if (input.awayStarter?.ipPerStart && input.awayStarter.ipPerStart > 4) { score += 3; reasons.push('away starter is bulk'); }
+  if (input.weather && (input.weather.tempF || input.weather.windSpeedMph)) { score += 8; reasons.push('weather data present'); }
+  if (input.travel) { score += 4; reasons.push('travel/rest applied'); }
+  if (input.umpire?.name) { score += 3; reasons.push('umpire identified'); }
+  if (input.park && input.park.name !== 'neutral') { score += 4; reasons.push('park profile loaded'); }
   const talentGap = Math.abs(homeOff - awayOff) + Math.abs(homeDef - awayDef);
-  if (talentGap > 1.5) { score += 8; reasons.push('large talent gap'); }
-  else if (talentGap > 0.7) { score += 4; reasons.push('moderate talent gap'); }
-  if (warnings.length) { score -= 12 * warnings.length; reasons.push(`${warnings.length} input gap${warnings.length === 1 ? '' : 's'}`); }
-  // CI relative width as a proxy
+  if (talentGap > 1.5) { score += 10; reasons.push('large talent gap'); }
+  else if (talentGap > 0.7) { score += 6; reasons.push('moderate talent gap'); }
+  else { score += 2; reasons.push('teams comparable'); }
+  if (warnings.length) { score -= 15 * warnings.length; reasons.push(`${warnings.length} input gap${warnings.length === 1 ? '' : 's'}`); }
+  // CI relative width as a proxy — looser threshold so it actually fires
   const ciWidth = (ci95.high - ci95.low) / Math.max(1, expectedTotal);
-  if (ciWidth < 0.6) { score += 6; reasons.push('tight CI'); }
+  if (ciWidth < 0.7) { score += 4; reasons.push('tight CI'); }
+  else if (ciWidth < 0.85) { score += 2; reasons.push('reasonable CI'); }
   score = Math.max(0, Math.min(100, score));
-  const level: Confidence['level'] = score >= 70 ? 'high' : score >= 50 ? 'medium' : 'low';
+  const level: Confidence['level'] = score >= 80 ? 'high' : score >= 60 ? 'medium' : 'low';
   const confidence: Confidence = { level, score, reasons };
 
   return {

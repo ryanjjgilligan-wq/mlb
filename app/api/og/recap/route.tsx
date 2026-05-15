@@ -77,7 +77,7 @@ export async function GET(req: Request) {
         <div style={{ flex: 1 }} />
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderTop: '1px solid #1f1f24', paddingTop: 18 }}>
           <div style={{ fontSize: 18, color: '#9a9aa3' }}>
-            Public track record · diamondiq.com/track-record
+            Daily slate recap · diamondiq.com/recap
           </div>
           <div style={{ fontSize: 14, color: '#62626b' }}>For analytical use only · not betting advice</div>
         </div>

@@ -26,7 +26,7 @@ export type LiveFieldData = {
 /**
  * Big visual baseball field. Diamond with runners by name, current pitcher,
  * current batter, count and outs as pixel dots. Refreshes with the parent's
- * 15-second auto-refresh.
+ * 5-second auto-refresh.
  */
 export function LiveGameField({ d }: { d: LiveFieldData }) {
   const battingTeam = d.isTopInning ? d.awayName : d.homeName;

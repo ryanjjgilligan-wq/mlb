@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { Badge } from './ui/Badge';
 import { Sparkline } from './ui/Sparkline';
-import { teamCapLogoUrl } from '@/lib/mlb';
+import { teamCapLogoUrl, playerHeadshotUrl } from '@/lib/mlb';
 
 export type LiveGameCardData = {
   gamePk: number;
@@ -24,6 +24,11 @@ export type LiveGameCardData = {
   venue?: string;
 };
 
+/**
+ * Live game card — emphasizes what's happening RIGHT NOW. Score header,
+ * mini field viz with bases + count + outs, big PIT vs BAT matchup with
+ * headshots, live WP, last play. Refreshes every 5s with the parent page.
+ */
 export function LiveGameCard({ d }: { d: LiveGameCardData }) {
   const homeLeading = d.home.score > d.away.score;
   const awayLeading = d.away.score > d.home.score;
@@ -31,40 +36,86 @@ export function LiveGameCard({ d }: { d: LiveGameCardData }) {
   const awayWPPct = homeWPPct !== null ? 100 - homeWPPct : null;
 
   return (
-    <article className="panel overflow-hidden">
-      {/* Header strip */}
-      <header className="flex items-center justify-between gap-2 px-3 py-2 border-b border-line bg-bg-raised">
-        <div className="flex items-center gap-2">
-          <Badge variant="neg" pulse>LIVE</Badge>
-          <span className="text-2xs text-ink-muted stat-num">
-            {d.inningState} {d.inning ? `${d.inning}${ord(d.inning)}` : ''}
-          </span>
-          <span className="text-2xs text-ink-faint">·</span>
-          <span className="text-2xs text-ink-muted stat-num">{d.outs} out · {d.balls}-{d.strikes}</span>
+    <article className="panel overflow-hidden flex flex-col">
+      {/* Score header — clean two-row layout with team logos */}
+      <header className="px-4 pt-3 pb-2 border-b border-line">
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2">
+            <Badge variant="neg" pulse>LIVE</Badge>
+            <span className="text-2xs text-ink-muted stat-num font-medium">
+              {d.inningState} {d.inning ? `${d.inning}${ord(d.inning)}` : ''}
+            </span>
+          </div>
+          <Link href={`/game/${d.gamePk}`} className="text-2xs text-ink-muted hover:text-ink uppercase tracking-micro">
+            full game →
+          </Link>
         </div>
-        <Link href={`/game/${d.gamePk}`} className="text-2xs text-ink-muted hover:text-ink uppercase tracking-micro">
-          detail →
-        </Link>
+
+        {/* Team rows with score */}
+        <div className="space-y-1.5">
+          <TeamScoreRow team={d.away} dim={homeLeading} batting={d.isTopInning} />
+          <TeamScoreRow team={d.home} dim={awayLeading} batting={!d.isTopInning} />
+        </div>
       </header>
 
-      {/* Scoreboard */}
-      <div className="px-3 py-3 grid grid-cols-[1fr_auto] gap-x-3 gap-y-2 items-center">
-        <TeamRow team={d.away} dim={homeLeading} batting={d.isTopInning} pitcherSide={!d.isTopInning} />
-        <ScoreCell value={d.away.score} highlight={awayLeading} />
-        <TeamRow team={d.home} dim={awayLeading} batting={!d.isTopInning} pitcherSide={d.isTopInning} />
-        <ScoreCell value={d.home.score} highlight={homeLeading} />
+      {/* Field + count/outs — the "right now" visual */}
+      <div className="px-4 pt-3 pb-2 grid grid-cols-[auto_1fr] gap-3 items-center bg-bg-raised/40 border-b border-line">
+        <MiniField
+          first={d.onFirst}
+          second={d.onSecond}
+          third={d.onThird}
+          isTopInning={d.isTopInning}
+        />
+        <div className="space-y-1">
+          <CountRow label="B" current={d.balls} max={4} color="#16a34a" />
+          <CountRow label="S" current={d.strikes} max={3} color="#dc2626" />
+          <CountRow label="O" current={d.outs} max={3} color="#737373" />
+        </div>
       </div>
 
-      {/* Win prob bar */}
+      {/* Pitcher → Batter matchup with headshots */}
+      {(d.currentPitcher || d.currentBatter) && (
+        <div className="px-4 py-3 grid grid-cols-[1fr_auto_1fr] gap-3 items-center border-b border-line">
+          {d.currentPitcher ? (
+            <Link href={`/player/${d.currentPitcher.id}`} className="flex items-center gap-2 min-w-0 hover:text-accent">
+              <img
+                src={playerHeadshotUrl(d.currentPitcher.id, 80)}
+                alt=""
+                className="w-9 h-9 rounded-full bg-bg-raised object-cover border border-line shrink-0"
+              />
+              <div className="min-w-0">
+                <div className="label-micro">PITCHER</div>
+                <div className="text-sm font-semibold text-ink truncate">{abbreviateName(d.currentPitcher.name)}</div>
+              </div>
+            </Link>
+          ) : <div />}
+          <span className="text-2xs text-ink-faint stat-num">vs</span>
+          {d.currentBatter ? (
+            <Link href={`/player/${d.currentBatter.id}`} className="flex items-center justify-end gap-2 min-w-0 hover:text-accent text-right">
+              <div className="min-w-0">
+                <div className="label-micro flex justify-end">BATTER</div>
+                <div className="text-sm font-semibold text-ink truncate">{abbreviateName(d.currentBatter.name)}</div>
+              </div>
+              <img
+                src={playerHeadshotUrl(d.currentBatter.id, 80)}
+                alt=""
+                className="w-9 h-9 rounded-full bg-bg-raised object-cover border border-line shrink-0"
+              />
+            </Link>
+          ) : <div />}
+        </div>
+      )}
+
+      {/* Win probability bar with sparkline */}
       {homeWPPct !== null && (
-        <div className="px-3 pb-3">
-          <div className="flex items-center justify-between text-2xs mb-1">
+        <div className="px-4 py-2.5 border-b border-line">
+          <div className="flex items-center justify-between text-2xs mb-1.5">
             <span className="stat-num text-ink-muted">
-              {d.away.abbr} <span className="text-ink font-medium">{awayWPPct!.toFixed(1)}%</span>
+              {d.away.abbr} <span className="text-ink font-semibold">{awayWPPct!.toFixed(0)}%</span>
             </span>
             <span className="label-micro text-ink-faint">live WP</span>
             <span className="stat-num text-ink-muted">
-              <span className="text-ink font-medium">{homeWPPct.toFixed(1)}%</span> {d.home.abbr}
+              <span className="text-ink font-semibold">{homeWPPct.toFixed(0)}%</span> {d.home.abbr}
             </span>
           </div>
           <div className="h-1.5 rounded overflow-hidden bg-bg-sunken flex">
@@ -72,45 +123,25 @@ export function LiveGameCard({ d }: { d: LiveGameCardData }) {
             <div className="h-full bg-signal-pos" style={{ width: `${homeWPPct}%` }} />
           </div>
           {d.wpSeries.length > 3 && (
-            <div className="mt-1">
-              <Sparkline values={d.wpSeries} width={280} height={20} positive />
+            <div className="mt-1.5">
+              <Sparkline values={d.wpSeries} width={280} height={22} positive />
             </div>
           )}
         </div>
       )}
 
-      {/* Matchup line */}
-      {(d.currentBatter || d.currentPitcher) && (
-        <div className="px-3 py-2 border-t border-line-subtle bg-bg-sunken/50 text-2xs text-ink-muted flex items-center gap-2 flex-wrap">
-          {d.currentPitcher && (
-            <Link href={`/player/${d.currentPitcher.id}`} className="hover:text-ink">
-              <span className="label-micro">P</span> {d.currentPitcher.name}
-            </Link>
-          )}
-          {d.currentPitcher && d.currentBatter && <span className="text-ink-faint">→</span>}
-          {d.currentBatter && (
-            <Link href={`/player/${d.currentBatter.id}`} className="hover:text-ink">
-              <span className="label-micro">AB</span> {d.currentBatter.name}
-            </Link>
-          )}
-          <span className="ml-auto flex items-center gap-1.5">
-            <BaseDiamond first={d.onFirst} second={d.onSecond} third={d.onThird} />
-          </span>
-        </div>
-      )}
-
-      {/* Last play */}
+      {/* Last play strip */}
       {d.lastPlay && (
-        <div className="px-3 py-2 border-t border-line-subtle text-2xs text-ink-muted">
-          <span className="label-micro mr-2">last</span>
-          {d.lastPlay}
+        <div className="px-4 py-2 mt-auto text-2xs text-ink-muted">
+          <span className="label-micro mr-2">LAST</span>
+          <span className="line-clamp-2">{d.lastPlay}</span>
         </div>
       )}
     </article>
   );
 }
 
-function TeamRow({
+function TeamScoreRow({
   team,
   dim,
   batting,
@@ -118,46 +149,88 @@ function TeamRow({
   team: LiveGameCardData['away'];
   dim?: boolean;
   batting?: boolean;
-  pitcherSide?: boolean;
 }) {
   return (
-    <Link href={`/team/${team.id}`} className={`flex items-center gap-2 min-w-0 ${dim ? 'opacity-60' : ''}`}>
-      <img src={teamCapLogoUrl(team.id)} alt="" className="w-6 h-6 team-logo opacity-90 shrink-0" />
-      <div className="min-w-0 flex items-center gap-2">
-        <span className="text-sm font-medium truncate">{team.name}</span>
-        {batting && <span className="text-2xs text-accent">●</span>}
+    <Link
+      href={`/team/${team.id}`}
+      className={`flex items-center gap-2 ${dim ? 'opacity-50' : ''}`}
+    >
+      <img src={teamCapLogoUrl(team.id)} alt="" className="w-6 h-6 team-logo opacity-95 shrink-0" />
+      <div className="min-w-0 flex-1 flex items-center gap-2">
+        <span className="text-base font-semibold truncate">{team.abbr}</span>
+        <span className="text-2xs text-ink-faint truncate hidden sm:inline">{team.name}</span>
+        {batting && <span className="text-xs text-accent">●</span>}
       </div>
-      {team.record && <span className="text-2xs text-ink-faint stat-num ml-auto">{team.record}</span>}
+      {team.record && <span className="text-2xs text-ink-faint stat-num">{team.record}</span>}
+      <span className="stat-num text-2xl font-bold w-8 text-right">{team.score}</span>
     </Link>
   );
 }
 
-function ScoreCell({ value, highlight }: { value: number; highlight?: boolean }) {
-  return (
-    <div className={`stat-num text-2xl font-semibold min-w-[2ch] text-right ${highlight ? 'text-ink' : 'text-ink-muted'}`}>
-      {value}
-    </div>
-  );
-}
-
-function BaseDiamond({
+function MiniField({
   first,
   second,
   third,
+  isTopInning,
 }: {
   first: boolean;
   second: boolean;
   third: boolean;
+  isTopInning: boolean;
 }) {
+  // Compact realistic field rendered in 96x96
   return (
-    <svg width="18" height="18" viewBox="0 0 18 18" aria-label="bases">
-      <g transform="translate(9 9) rotate(45) translate(-3 -3)">
-        <rect x="6" y="-6" width="6" height="6" fill={first ? 'var(--accent)' : 'none'} stroke="var(--line-strong)" strokeWidth="0.6" />
-        <rect x="0" y="-12" width="6" height="6" fill={second ? 'var(--accent)' : 'none'} stroke="var(--line-strong)" strokeWidth="0.6" />
-        <rect x="-6" y="-6" width="6" height="6" fill={third ? 'var(--accent)' : 'none'} stroke="var(--line-strong)" strokeWidth="0.6" />
-      </g>
+    <svg width="96" height="96" viewBox="0 0 96 96" className="shrink-0">
+      <defs>
+        <radialGradient id="miniGrass" cx="50%" cy="100%" r="120%">
+          <stop offset="0%" stopColor="#3a7a3a" />
+          <stop offset="100%" stopColor="#1f4f1f" />
+        </radialGradient>
+      </defs>
+      {/* Outfield sector */}
+      <path d="M 48 78 L 8 38 A 56 56 0 0 1 88 38 Z" fill="url(#miniGrass)" />
+      {/* Infield dirt */}
+      <circle cx="48" cy="60" r="26" fill="#8b6f47" />
+      {/* Infield diamond grass */}
+      <polygon points="48,78 64,62 48,46 32,62" fill="#357535" stroke="#fff" strokeWidth="0.8" strokeOpacity="0.7" />
+      {/* Pitcher's mound */}
+      <circle cx="48" cy="62" r="4.5" fill="#a17a4d" />
+      <rect x="46" y="60.5" width="4" height="1.2" fill="#fff" />
+      {/* Bases */}
+      <rect x={64 - 3} y={62 - 3} width="6" height="6" transform="rotate(45 64 62)" fill={first ? '#facc15' : '#fff'} stroke={first ? '#a3850f' : '#cdcdcd'} strokeWidth="0.5" />
+      <rect x={48 - 3} y={46 - 3} width="6" height="6" transform="rotate(45 48 46)" fill={second ? '#facc15' : '#fff'} stroke={second ? '#a3850f' : '#cdcdcd'} strokeWidth="0.5" />
+      <rect x={32 - 3} y={62 - 3} width="6" height="6" transform="rotate(45 32 62)" fill={third ? '#facc15' : '#fff'} stroke={third ? '#a3850f' : '#cdcdcd'} strokeWidth="0.5" />
+      {/* Home plate */}
+      <polygon points="48,82 44,78 44,75 52,75 52,78" fill="#fff" stroke="#222" strokeWidth="0.4" />
     </svg>
   );
+}
+
+function CountRow({ label, current, max, color }: { label: string; current: number; max: number; color: string }) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="label-micro w-3 stat-num">{label}</span>
+      <div className="flex items-center gap-1">
+        {Array.from({ length: max }).map((_, i) => (
+          <span
+            key={i}
+            className="w-2 h-2 rounded-full"
+            style={{
+              background: i < current ? color : 'transparent',
+              border: i < current ? `1px solid ${color}` : '1px solid var(--line-strong)',
+            }}
+          />
+        ))}
+      </div>
+      <span className="ml-auto text-2xs stat-num text-ink-muted">{current}</span>
+    </div>
+  );
+}
+
+function abbreviateName(name: string): string {
+  const parts = name.split(' ');
+  if (parts.length === 1) return parts[0];
+  return `${parts[0][0]}. ${parts.slice(1).join(' ')}`;
 }
 
 function ord(n: number) {
