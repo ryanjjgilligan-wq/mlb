@@ -6,6 +6,8 @@ import {
   getTeamStats,
   getStandings,
   getScheduleRange,
+  getRemainingSchedule,
+  getInjuryList,
   teamCapLogoUrl,
   playerHeadshotUrl,
 } from '@/lib/mlb';
@@ -14,6 +16,8 @@ import { Stat } from '@/components/ui/Stat';
 import { Badge } from '@/components/ui/Badge';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { Empty } from '@/components/ui/Empty';
+import { WatchButton } from '@/components/WatchButton';
+import { MonteCarloChart } from '@/components/MonteCarloChart';
 import {
   fmtAvg,
   fmtSigned,
@@ -21,6 +25,7 @@ import {
   pythagorean,
   expectedRecord,
 } from '@/lib/saber';
+import { runMonteCarlo, type SimGame, type SimTeam } from '@/lib/montecarlo';
 import { shiftYmd, ymd, formatGameTime } from '@/lib/time';
 
 export const revalidate = 300;
@@ -38,12 +43,14 @@ export default async function TeamPage({ params }: { params: { id: string } }) {
   const start = shiftYmd(today, -3);
   const end = shiftYmd(today, 10);
 
-  const [team, roster, stats, standings, scheduleRange] = await Promise.all([
+  const [team, roster, stats, standings, scheduleRange, remainingSchedule, injuries] = await Promise.all([
     getTeam(id),
     getRoster(id).catch(() => []),
     getTeamStats(id).catch(() => []),
     getStandings().catch(() => []),
     getScheduleRange(start, end).catch(() => []),
+    getRemainingSchedule(id).catch(() => []),
+    getInjuryList(id).catch(() => []),
   ]);
 
   if (!team) notFound();
@@ -66,6 +73,38 @@ export default async function TeamPage({ params }: { params: { id: string } }) {
   const hittingSplit = stats.find((s: any) => s.group?.displayName === 'hitting')?.splits?.[0]?.stat ?? {};
   const pitchingSplit = stats.find((s: any) => s.group?.displayName === 'pitching')?.splits?.[0]?.stat ?? {};
 
+  // Monte Carlo final-record sim
+  const simTeams: SimTeam[] = standings
+    .flatMap((d) => d.teamRecords)
+    .map((tr) => ({
+      id: tr.team.id,
+      name: tr.team.name,
+      wins: tr.wins,
+      losses: tr.losses,
+      pyth: pythagorean(tr.runsScored ?? 0, tr.runsAllowed ?? 0) || 0.5,
+    }));
+  const simGames: SimGame[] = remainingSchedule
+    .filter((g) => g.teams.home?.team?.id && g.teams.away?.team?.id)
+    .map((g) => ({ homeId: g.teams.home.team.id, awayId: g.teams.away.team.id }));
+  const mcResult = simTeams.length && simGames.length
+    ? runMonteCarlo(id, simTeams, simGames, 5000, id)
+    : { expectedWins: w, expectedLosses: l, winDistribution: [], iterationsRun: 0 };
+
+  // Identify a playoff-contention threshold from this league using the
+  // current 6th-best record in this team's league (approx WC cut).
+  const sameLeagueRecords = standings
+    .filter((d) => d.league?.id === team.league?.id)
+    .flatMap((d) => d.teamRecords)
+    .map((tr) => tr.wins + tr.losses ? tr.wins / (tr.wins + tr.losses) : 0);
+  const sortedLg = [...sameLeagueRecords].sort((a, b) => b - a);
+  const wcCutPct = sortedLg[5] ?? 0.500;
+  const totalGames = w + l + remainingSchedule.length;
+  const wcCutWins = Math.round(wcCutPct * totalGames);
+  const playoffProbability = mcResult.winDistribution.reduce(
+    (sum, d) => sum + (d.wins >= wcCutWins ? d.freq : 0),
+    0
+  );
+
   // Categorize roster
   const pitchers = roster.filter((r) => r.position.code === '1' || r.position.abbreviation === 'P');
   const position = roster.filter((r) => r.position.code !== '1' && r.position.abbreviation !== 'P');
@@ -87,6 +126,9 @@ export default async function TeamPage({ params }: { params: { id: string } }) {
             <Badge>{team.abbreviation}</Badge>
             {team.league && <Badge variant="info">{team.league.name}</Badge>}
             {team.division && <Badge>{team.division.name}</Badge>}
+            <span className="ml-auto">
+              <WatchButton type="team" id={team.id} name={team.name} meta={team.abbreviation} />
+            </span>
           </div>
           <p className="text-sm text-ink-muted mt-1">
             {team.venue?.name}
@@ -153,6 +195,54 @@ export default async function TeamPage({ params }: { params: { id: string } }) {
           </div>
         </Panel>
 
+        {/* Monte Carlo final-record sim */}
+        <Panel
+          className="lg:col-span-12"
+          title="Playoff projection · Monte Carlo"
+          subtitle={
+            mcResult.iterationsRun > 0
+              ? `${mcResult.iterationsRun.toLocaleString()} sims · Log5 per game with HFA · ${remainingSchedule.length} remaining games`
+              : 'Insufficient data'
+          }
+        >
+          <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-6">
+            <div className="grid grid-cols-2 gap-4 self-start">
+              <Stat
+                label="Exp. final W-L"
+                value={`${mcResult.expectedWins.toFixed(1)}-${mcResult.expectedLosses.toFixed(1)}`}
+                size="md"
+                hint="Mean across all simulated season completions"
+              />
+              <Stat
+                label="Playoff prob."
+                value={`${(playoffProbability * 100).toFixed(1)}%`}
+                size="md"
+                trend={playoffProbability > 0.5 ? 'pos' : playoffProbability < 0.2 ? 'neg' : 'neutral'}
+                hint={`Share of sims with wins ≥ ${wcCutWins} (current 6th-best W% in ${team.league?.name ?? 'league'} × total games)`}
+              />
+              <Stat
+                label="Remaining games"
+                value={remainingSchedule.length}
+                size="md"
+                align="left"
+              />
+              <Stat
+                label="Iterations"
+                value={mcResult.iterationsRun.toLocaleString()}
+                size="md"
+                align="left"
+              />
+            </div>
+            <MonteCarloChart
+              distribution={mcResult.winDistribution}
+              expectedWins={mcResult.expectedWins}
+            />
+          </div>
+          <p className="text-2xs text-ink-faint mt-3">
+            Talent estimator is each club's current-season Pythagorean expected W%. Method and limitations on <Link href="/lab" className="underline">/lab</Link>.
+          </p>
+        </Panel>
+
         {/* Schedule */}
         <Panel
           className="lg:col-span-5"
@@ -202,6 +292,33 @@ export default async function TeamPage({ params }: { params: { id: string } }) {
             <RosterColumn label="Pitchers" entries={pitchers} />
             <RosterColumn label="Position Players" entries={position} />
           </div>
+        </Panel>
+
+        {/* Injury list */}
+        <Panel
+          className="lg:col-span-12"
+          title="Injury list"
+          subtitle={injuries.length ? `${injuries.length} players currently on the IL` : 'No active injuries reported'}
+          flush
+        >
+          {injuries.length === 0 ? (
+            <Empty title="No active IL placements." description="The full-season roster reports no players currently in an injured/disabled status." />
+          ) : (
+            <ul className="divide-y divide-line-subtle">
+              {injuries.map((p) => (
+                <li key={p.person.id}>
+                  <Link href={`/player/${p.person.id}`} className="flex items-center gap-3 px-3 py-2 row-hover">
+                    <img src={playerHeadshotUrl(p.person.id, 60)} alt="" className="w-7 h-7 rounded-full bg-bg-raised object-cover" />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm truncate">{p.person.fullName}</div>
+                      <div className="text-2xs text-ink-faint truncate">{p.position.abbreviation}</div>
+                    </div>
+                    <Badge variant="warn">{p.status.description}</Badge>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
         </Panel>
       </div>
     </div>

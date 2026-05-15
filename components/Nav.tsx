@@ -3,13 +3,14 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/cn';
-import { Activity, BarChart3, Users, BookOpenCheck, Search } from 'lucide-react';
+import { Activity, BarChart3, Users, BookOpenCheck, Search, Star } from 'lucide-react';
 import { SearchCommand } from './SearchCommand';
 
 const nav = [
   { href: '/', label: 'League', icon: Activity },
   { href: '/teams', label: 'Teams', icon: Users },
   { href: '/standings', label: 'Standings', icon: BarChart3 },
+  { href: '/watchlist', label: 'Watchlist', icon: Star },
   { href: '/lab', label: 'Model Lab', icon: BookOpenCheck },
 ];
 

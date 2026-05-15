@@ -161,6 +161,20 @@ export async function getRoster(teamId: number, season?: number): Promise<Roster
   return data.roster ?? [];
 }
 
+/** Players currently on any flavor of injured list for a team. */
+export async function getInjuryList(teamId: number, season?: number): Promise<RosterEntry[]> {
+  const s = season ?? new Date().getFullYear();
+  const data = await get<{ roster: RosterEntry[] }>(
+    `/teams/${teamId}/roster?rosterType=fullRoster&season=${s}`,
+    { revalidate: 1800 }
+  ).catch(() => ({ roster: [] as RosterEntry[] }));
+  return (data.roster ?? []).filter(
+    (r) =>
+      /injured|disabled/i.test(r.status.description) ||
+      /^IL|^D\d|^DTD$/.test(r.status.code)
+  );
+}
+
 // ── Team stats ──────────────────────────────────────────────────────────────
 
 export async function getTeamStats(teamId: number, season?: number) {
@@ -234,6 +248,70 @@ export async function getPlayerCareerStats(
     { revalidate: 86400 }
   );
   return data?.stats?.[0]?.splits ?? [];
+}
+
+/** Game log — every game played this season with per-game counting stats. */
+export async function getPlayerGameLog(
+  id: number,
+  group: 'hitting' | 'pitching' = 'hitting',
+  season?: number
+): Promise<any[]> {
+  const s = season ?? new Date().getFullYear();
+  const data = await get<any>(
+    `/people/${id}/stats?stats=gameLog&group=${group}&season=${s}`,
+    { revalidate: 600 }
+  );
+  return data?.stats?.[0]?.splits ?? [];
+}
+
+/** Splits — vs LHP / vs RHP, home/away, day/night, etc. */
+export async function getPlayerSplits(
+  id: number,
+  group: 'hitting' | 'pitching' = 'hitting',
+  season?: number
+): Promise<any[]> {
+  const s = season ?? new Date().getFullYear();
+  const sitCodes = group === 'hitting'
+    ? 'vl,vr,h,a,d,n' // vs LHP, vs RHP, home, away, day, night
+    : 'vl,vr,h,a,d,n';
+  const data = await get<any>(
+    `/people/${id}/stats?stats=statSplits&sitCodes=${sitCodes}&group=${group}&season=${s}`,
+    { revalidate: 600 }
+  );
+  return data?.stats?.[0]?.splits ?? [];
+}
+
+/** League-wide hitting leaders — used as the comparables corpus. */
+export async function getHittingLeaders(season?: number, limit = 200): Promise<any[]> {
+  const s = season ?? new Date().getFullYear();
+  const data = await get<any>(
+    `/stats?stats=season&group=hitting&season=${s}&playerPool=Qualified&limit=${limit}`,
+    { revalidate: 3600 }
+  );
+  return data?.stats?.[0]?.splits ?? [];
+}
+
+export async function getPitchingLeaders(season?: number, limit = 200): Promise<any[]> {
+  const s = season ?? new Date().getFullYear();
+  const data = await get<any>(
+    `/stats?stats=season&group=pitching&season=${s}&playerPool=Qualified&limit=${limit}`,
+    { revalidate: 3600 }
+  );
+  return data?.stats?.[0]?.splits ?? [];
+}
+
+/** Remaining schedule for a team this season — Monte Carlo input. */
+export async function getRemainingSchedule(teamId: number, season?: number): Promise<ScheduleGame[]> {
+  const s = season ?? new Date().getFullYear();
+  const data = await get<{ dates: ScheduleDate[] }>(
+    `/schedule?sportId=1&teamId=${teamId}&season=${s}&hydrate=team`,
+    { revalidate: 3600 }
+  );
+  const today = new Date().toISOString().slice(0, 10);
+  return (data.dates ?? [])
+    .filter((d) => d.date >= today)
+    .flatMap((d) => d.games)
+    .filter((g) => g.status.abstractGameState === 'Preview');
 }
 
 // ── Game / live feed ────────────────────────────────────────────────────────

@@ -4,6 +4,7 @@ import {
   getGameLive,
   getGameWinProbability,
   getStandings,
+  getPlayerSplits,
   teamCapLogoUrl,
   playerHeadshotUrl,
 } from '@/lib/mlb';
@@ -12,6 +13,7 @@ import { Stat } from '@/components/ui/Stat';
 import { Badge } from '@/components/ui/Badge';
 import { Empty } from '@/components/ui/Empty';
 import { WinProbChart, type WPPoint } from '@/components/WinProbChart';
+import { LeverageChart, type LeveragePoint } from '@/components/LeverageChart';
 import { pythagorean, fmtAvg } from '@/lib/saber';
 import { preGameHomeWP } from '@/lib/winprob';
 import { formatGameTime } from '@/lib/time';
@@ -50,6 +52,31 @@ export default async function GamePage({ params }: { params: { id: string } }) {
   const awayProbable = gameData.probablePitchers?.away;
   const homeProbable = gameData.probablePitchers?.home;
 
+  // Lineup vs. opposing-handedness matchup: pull each likely batter's split
+  // line against the opposing starter's pitching hand.
+  const boxscoreEarly = liveData?.boxscore;
+  const awayBatters: number[] = (boxscoreEarly?.teams?.away?.battingOrder ?? boxscoreEarly?.teams?.away?.batters ?? []).slice(0, 9);
+  const homeBatters: number[] = (boxscoreEarly?.teams?.home?.battingOrder ?? boxscoreEarly?.teams?.home?.batters ?? []).slice(0, 9);
+  const awayStartHand = (awayProbable?.pitchHand?.code ?? '').toUpperCase(); // L or R
+  const homeStartHand = (homeProbable?.pitchHand?.code ?? '').toUpperCase();
+
+  async function pullMatchups(batters: number[], oppHand: string) {
+    if (!batters.length || !oppHand) return [];
+    const sit = oppHand === 'L' ? 'vl' : 'vr';
+    return Promise.all(batters.map(async (bid) => {
+      const splits = await getPlayerSplits(bid, 'hitting').catch(() => []);
+      const found = splits.find((sp: any) => sp.split?.code === sit);
+      return { batterId: bid, split: found, fullName: boxscoreEarly?.teams?.away?.players?.[`ID${bid}`]?.person?.fullName
+        ?? boxscoreEarly?.teams?.home?.players?.[`ID${bid}`]?.person?.fullName
+        ?? '' };
+    }));
+  }
+
+  const [awayVsHome, homeVsAway] = await Promise.all([
+    pullMatchups(awayBatters, homeStartHand),
+    pullMatchups(homeBatters, awayStartHand),
+  ]);
+
   const awayRec = standings.flatMap((d) => d.teamRecords).find((tr) => tr.team.id === away.id);
   const homeRec = standings.flatMap((d) => d.teamRecords).find((tr) => tr.team.id === home.id);
 
@@ -67,6 +94,24 @@ export default async function GamePage({ params }: { params: { id: string } }) {
       : 0.5,
     desc: p.result?.description ?? p.about?.halfInning + ' ' + (p.about?.inning ?? ''),
   }));
+
+  // Derive leverage events from WP swings — top swings by absolute WPA
+  const leverageAll: LeveragePoint[] = [];
+  for (let i = 1; i < wpPoints.length; i++) {
+    const wpa = wpPoints[i].homeWP - wpPoints[i - 1].homeWP;
+    leverageAll.push({
+      idx: i,
+      inning: wpPoints[i].inning,
+      wpa,
+      abs: Math.abs(wpa),
+      desc: wpPoints[i].desc,
+    });
+  }
+  const topLeverage = [...leverageAll]
+    .sort((a, b) => b.abs - a.abs)
+    .slice(0, 12)
+    .sort((a, b) => a.idx - b.idx)
+    .map((p, i) => ({ ...p, idx: i }));
 
   return (
     <div className="max-w-[1600px] mx-auto px-4 py-6 space-y-6">
@@ -152,7 +197,7 @@ export default async function GamePage({ params }: { params: { id: string } }) {
 
         {/* Probable pitchers / starting pitchers */}
         <Panel
-          className="lg:col-span-12"
+          className="lg:col-span-7"
           title={isPreview ? 'Probable starters' : 'Starting pitchers'}
         >
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -160,6 +205,36 @@ export default async function GamePage({ params }: { params: { id: string } }) {
             <PitcherCard player={homeProbable} side="Home" />
           </div>
         </Panel>
+
+        {/* Leverage swings */}
+        <Panel
+          className="lg:col-span-5"
+          title="Highest-leverage plays"
+          subtitle={topLeverage.length ? `Top 12 WP swings (home perspective)` : 'Pending live plays'}
+        >
+          <LeverageChart data={topLeverage} />
+        </Panel>
+
+        {/* Lineup vs. opposing starter (platoon splits) */}
+        {(awayVsHome.length > 0 || homeVsAway.length > 0) && (
+          <Panel
+            className="lg:col-span-12"
+            title="Lineup vs. opposing starter"
+            subtitle="Each batter's season split vs. the starter's pitching hand · OBP/SLG/OPS"
+            flush
+          >
+            <div className="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-line">
+              <MatchupTable
+                rows={awayVsHome}
+                teamLabel={`${away.teamName} vs ${homeStartHand}HP ${homeProbable?.fullName ?? ''}`}
+              />
+              <MatchupTable
+                rows={homeVsAway}
+                teamLabel={`${home.teamName} vs ${awayStartHand}HP ${awayProbable?.fullName ?? ''}`}
+              />
+            </div>
+          </Panel>
+        )}
 
         {/* Linescore */}
         {innings.length > 0 && (
@@ -381,4 +456,58 @@ function Th({ children }: { children: React.ReactNode }) {
 }
 function Td({ v }: { v: any }) {
   return <td className="text-right stat-num text-ink-muted pl-2">{v ?? '—'}</td>;
+}
+
+function MatchupTable({
+  rows,
+  teamLabel,
+}: {
+  rows: Array<{ batterId: number; split: any; fullName: string }>;
+  teamLabel: string;
+}) {
+  return (
+    <div className="p-3">
+      <div className="label-micro mb-2 px-1 truncate">{teamLabel}</div>
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-2xs uppercase tracking-micro text-ink-muted">
+            <th className="text-left font-medium pb-1">Batter</th>
+            <th className="text-right font-medium pb-1">PA</th>
+            <th className="text-right font-medium pb-1">AVG</th>
+            <th className="text-right font-medium pb-1">OBP</th>
+            <th className="text-right font-medium pb-1">SLG</th>
+            <th className="text-right font-medium pb-1">OPS</th>
+            <th className="text-right font-medium pb-1">HR</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => {
+            const s = r.split?.stat ?? {};
+            const ops = parseFloat(s.ops ?? '0');
+            return (
+              <tr key={r.batterId} className="row-hover border-t border-line-subtle">
+                <td className="py-1 pr-2 flex items-center gap-2">
+                  <span className="text-2xs text-ink-faint stat-num w-4">{i + 1}</span>
+                  <Link href={`/player/${r.batterId}`} className="text-sm hover:text-accent truncate">
+                    {r.fullName || `#${r.batterId}`}
+                  </Link>
+                </td>
+                <td className="text-right stat-num text-ink-muted">{s.plateAppearances ?? '—'}</td>
+                <td className="text-right stat-num text-ink-muted">{s.avg ?? '—'}</td>
+                <td className="text-right stat-num text-ink-muted">{s.obp ?? '—'}</td>
+                <td className="text-right stat-num text-ink-muted">{s.slg ?? '—'}</td>
+                <td className={`text-right stat-num ${ops > 0.800 ? 'text-signal-pos' : ops > 0 && ops < 0.650 ? 'text-signal-neg' : 'text-ink-muted'}`}>
+                  {s.ops ?? '—'}
+                </td>
+                <td className="text-right stat-num text-ink-muted">{s.homeRuns ?? '—'}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <p className="text-2xs text-ink-faint mt-2">
+        Splits via MLB Stats API. Empty rows = no qualifying PA vs that hand yet this season.
+      </p>
+    </div>
+  );
 }

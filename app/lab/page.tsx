@@ -72,6 +72,41 @@ export default function LabPage() {
           notes={['We display, we do not compute. Treat as ground truth for live games.']}
         />
         <Section
+          name="Playoff probability — Monte Carlo"
+          status="baseline"
+          formula="N=5,000 sims of focal team's remaining schedule. Each game: Log5(home.pyth, away.pyth) with HFA odds-ratio adjustment. Playoff cut = current 6th-best W% in same league × total games."
+          source="Standard sim approach; talent estimator is current-season Pythagorean."
+          notes={[
+            'Deterministic per-team via seeded mulberry32 RNG — repeat renders give the same answer.',
+            'Limitation: opponent records held fixed (we don\'t simulate every league game). Real Baseball-Reference style sim needs full league remaining schedule.',
+            'Inherits early-season noise from Pythagorean talent input.',
+          ]}
+        />
+        <Section
+          name="Leverage / high-impact play timeline"
+          status="solid"
+          formula="WPA(play_i) = homeWP(i) − homeWP(i−1) for each play in the MLB win-probability series; top 12 by |WPA|."
+          source="Derived from MLB Stats API /winProbability endpoint."
+          notes={['Pure derivation, no model — these are the actual swings the official feed computed.']}
+        />
+        <Section
+          name="Comparables (k-NN)"
+          status="baseline"
+          formula="Euclidean distance on z-scored rate stats: hitters → (AVG, OBP, SLG, HR/AB, K%, BB%, SB/G); pitchers → (ERA, WHIP, K/9, BB/9, HR/9, OAvg). Similarity = 1/(1+distance)."
+          source="Standard NN approach, computed at request time over qualified player pool."
+          notes={[
+            'Corpus = current season qualified hitters or pitchers (up to 200).',
+            'No park / age / role adjustments — players from different roles may match by raw shape.',
+          ]}
+        />
+        <Section
+          name="Lineup-vs-pitcher matchup matrix"
+          status="solid"
+          formula="Each batter's season split vs the opposing starter's pitching hand (vL or vR), pulled from MLB statSplits endpoint."
+          source="MLB Stats API."
+          notes={['Empty rows = no qualifying PA vs that hand yet this season. No projection model on top yet.']}
+        />
+        <Section
           name="Run total prediction"
           status="todo"
           formula="Planned: Poisson / Negative Binomial regression on team RS/G, opp RA/G, starter FIP, park, weather"
@@ -119,6 +154,21 @@ export default function LabPage() {
         </div>
       </Panel>
 
+      <Panel title="What's now shipped (vs original spec)" subtitle="Tracking against the deliverables list">
+        <ul className="text-sm space-y-1.5 text-ink list-disc pl-5">
+          <li>Live scoreboard, standings with Pyth Δ, team & player dossiers</li>
+          <li>Rolling performance charts (15/30/60-game windows with regression bands)</li>
+          <li>Splits panel (vs LHP/RHP, home/away, day/night)</li>
+          <li>Comparables engine (k-NN over rate-stat z-scores)</li>
+          <li>Monte Carlo playoff odds (5k sims per team)</li>
+          <li>Lineup-vs-starter platoon matchup matrix</li>
+          <li>Live win probability + leverage/high-impact play timeline</li>
+          <li>Watchlist via browser localStorage</li>
+          <li>Injury list per team</li>
+          <li>⌘K command palette search across all players & teams</li>
+        </ul>
+      </Panel>
+
       <Panel title="What's intentionally missing (yet)" subtitle="Honest roadmap">
         <ul className="text-sm space-y-2 text-ink-muted list-disc pl-5">
           <li>
@@ -140,11 +190,11 @@ export default function LabPage() {
             transition-probability calibration from PBP data.
           </li>
           <li>
-            <span className="text-ink">Monte Carlo playoff odds.</span> Tractable with current data;
-            ~10k sims per evaluation. Planned.
+            <span className="text-ink">Cross-device watchlist sync, alerts.</span> Need auth +
+            persistence + a push channel.
           </li>
           <li>
-            <span className="text-ink">Watchlists & alerts.</span> Needs auth + persistence layer.
+            <span className="text-ink">Vegas line edges.</span> Need a paid odds API.
           </li>
         </ul>
       </Panel>

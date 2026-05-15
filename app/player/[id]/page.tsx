@@ -4,6 +4,10 @@ import {
   getPlayer,
   getPlayerSeasonStats,
   getPlayerCareerStats,
+  getPlayerGameLog,
+  getPlayerSplits,
+  getHittingLeaders,
+  getPitchingLeaders,
   playerHeadshotUrl,
   teamCapLogoUrl,
 } from '@/lib/mlb';
@@ -13,6 +17,11 @@ import { Badge } from '@/components/ui/Badge';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { Empty } from '@/components/ui/Empty';
 import { PercentileBar } from '@/components/PercentileBar';
+import { WatchButton } from '@/components/WatchButton';
+import { RollingChart } from '@/components/RollingChart';
+import { SplitsTable } from '@/components/SplitsTable';
+import { buildRolling, type MetricKey } from '@/lib/rolling';
+import { buildHitterCorpus, buildPitcherCorpus, findComparables } from '@/lib/knn';
 import {
   obp,
   slg,
@@ -48,10 +57,17 @@ export default async function PlayerPage({ params }: { params: { id: string } })
   const isPitcher = player.primaryPosition.code === '1';
   const group = isPitcher ? 'pitching' : 'hitting';
 
-  const [seasonSplit, careerSplits] = await Promise.all([
+  const [seasonSplit, careerSplits, gameLog, splits, leaderboard] = await Promise.all([
     getPlayerSeasonStats(id, group as any).catch(() => null),
     getPlayerCareerStats(id, group as any).catch(() => []),
+    getPlayerGameLog(id, group as any).catch(() => []),
+    getPlayerSplits(id, group as any).catch(() => []),
+    isPitcher ? getPitchingLeaders().catch(() => []) : getHittingLeaders().catch(() => []),
   ]);
+
+  // Comparables from the corpus
+  const corpus = isPitcher ? buildPitcherCorpus(leaderboard) : buildHitterCorpus(leaderboard);
+  const comparables = findComparables(id, corpus, 6);
 
   const s = (seasonSplit?.stat ?? {}) as Record<string, any>;
   const hasSeasonData = Object.keys(s).length > 0;
@@ -70,6 +86,14 @@ export default async function PlayerPage({ params }: { params: { id: string } })
             <h1 className="text-2xl font-semibold tracking-tight">{player.fullName}</h1>
             <Badge variant="accent">{player.primaryPosition.abbreviation}</Badge>
             {player.primaryNumber && <Badge>#{player.primaryNumber}</Badge>}
+            <span className="ml-auto">
+              <WatchButton
+                type="player"
+                id={player.id}
+                name={player.fullName}
+                meta={player.currentTeam?.name}
+              />
+            </span>
           </div>
           <p className="text-sm text-ink-muted mt-1 flex items-center gap-2 flex-wrap">
             {player.currentTeam && (
@@ -105,9 +129,9 @@ export default async function PlayerPage({ params }: { params: { id: string } })
           />
         </Panel>
       ) : isPitcher ? (
-        <PitcherView season={s} careerSplits={careerSplits} />
+        <PitcherView season={s} careerSplits={careerSplits} gameLog={gameLog} splits={splits} comparables={comparables} />
       ) : (
-        <HitterView season={s} careerSplits={careerSplits} />
+        <HitterView season={s} careerSplits={careerSplits} gameLog={gameLog} splits={splits} comparables={comparables} />
       )}
 
       {careerSplits.length > 1 && (
@@ -187,7 +211,19 @@ function Td({ v }: { v: any }) {
   return <td className="text-right stat-num px-2 py-1.5 text-ink-muted">{v ?? '—'}</td>;
 }
 
-function HitterView({ season, careerSplits }: { season: Record<string, any>; careerSplits: any[] }) {
+function HitterView({
+  season,
+  careerSplits,
+  gameLog,
+  splits,
+  comparables,
+}: {
+  season: Record<string, any>;
+  careerSplits: any[];
+  gameLog: any[];
+  splits: any[];
+  comparables: ReturnType<typeof findComparables>;
+}) {
   const computedWoba = woba(season);
   const computedBabip = babip(season);
   const computedIso = iso(season);
@@ -274,11 +310,51 @@ function HitterView({ season, careerSplits }: { season: Record<string, any>; car
           Approximate league anchors. For exact Savant-style percentiles, ingest cohort distributions per season.
         </p>
       </Panel>
+
+      {/* Rolling performance */}
+      <Panel
+        className="lg:col-span-12"
+        title="Rolling performance"
+        subtitle={`Game log · ${gameLog.length} games this season · shaded band is a ±1.96σ Wilson-style interval`}
+      >
+        {gameLog.length >= 3 ? (
+          <RollingHitter gameLog={gameLog} />
+        ) : (
+          <Empty title="Not enough games" description="Rolling windows need at least three games of data." />
+        )}
+      </Panel>
+
+      {/* Splits */}
+      <Panel className="lg:col-span-7" title="Splits" subtitle="vs handedness · home/away · day/night" flush>
+        <SplitsTable splits={splits} isPitching={false} />
+      </Panel>
+
+      {/* Comparables */}
+      <Panel
+        className="lg:col-span-5"
+        title="Comparables"
+        subtitle="k-NN over season rate-stat z-scores (qualified hitters)"
+        flush
+      >
+        <ComparablesList comparables={comparables} />
+      </Panel>
     </div>
   );
 }
 
-function PitcherView({ season, careerSplits }: { season: Record<string, any>; careerSplits: any[] }) {
+function PitcherView({
+  season,
+  careerSplits,
+  gameLog,
+  splits,
+  comparables,
+}: {
+  season: Record<string, any>;
+  careerSplits: any[];
+  gameLog: any[];
+  splits: any[];
+  comparables: ReturnType<typeof findComparables>;
+}) {
   const computedFip = fip(season);
   const computedWhip = whip(season);
   const computedK9 = k9(season);
@@ -354,7 +430,102 @@ function PitcherView({ season, careerSplits }: { season: Record<string, any>; ca
           />
         </div>
       </Panel>
+
+      <Panel
+        className="lg:col-span-12"
+        title="Rolling performance"
+        subtitle={`Game log · ${gameLog.length} appearances · shaded band ≈ ±1σ rate uncertainty`}
+      >
+        {gameLog.length >= 3 ? (
+          <RollingPitcher gameLog={gameLog} />
+        ) : (
+          <Empty title="Not enough appearances" description="Need at least three outings." />
+        )}
+      </Panel>
+
+      <Panel className="lg:col-span-7" title="Splits" subtitle="vs handedness · home/away · day/night" flush>
+        <SplitsTable splits={splits} isPitching={true} />
+      </Panel>
+
+      <Panel
+        className="lg:col-span-5"
+        title="Comparables"
+        subtitle="k-NN over season rate-stat z-scores (qualified pitchers)"
+        flush
+      >
+        <ComparablesList comparables={comparables} />
+      </Panel>
     </div>
+  );
+}
+
+function RollingHitter({ gameLog }: { gameLog: any[] }) {
+  const sorted = [...gameLog].sort((a, b) => (a.date ?? '').localeCompare(b.date ?? ''));
+  const w15Avg = buildRolling(sorted, 'avg', 15);
+  const w15Woba = buildRolling(sorted, 'woba', 15);
+  const w30Ops = buildRolling(sorted, 'ops', 30);
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div>
+        <div className="label-micro mb-1">15-game rolling AVG</div>
+        <RollingChart data={w15Avg} metricLabel="AVG" metricColor="#facc15" />
+      </div>
+      <div>
+        <div className="label-micro mb-1">15-game rolling wOBA</div>
+        <RollingChart data={w15Woba} metricLabel="wOBA" metricColor="#34d399" />
+      </div>
+      <div>
+        <div className="label-micro mb-1">30-game rolling OPS</div>
+        <RollingChart data={w30Ops} metricLabel="OPS" metricColor="#60a5fa" yDomain={[0, 1.5]} />
+      </div>
+    </div>
+  );
+}
+
+function RollingPitcher({ gameLog }: { gameLog: any[] }) {
+  const sorted = [...gameLog].sort((a, b) => (a.date ?? '').localeCompare(b.date ?? ''));
+  const w5K9 = buildRolling(sorted, 'k9', 5, true);
+  const w5Fip = buildRolling(sorted, 'fip', 5, true);
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div>
+        <div className="label-micro mb-1">5-start rolling K/9</div>
+        <RollingChart data={w5K9} metricLabel="K/9" metricColor="#34d399" format={(v) => v.toFixed(1)} yDomain={[0, 16]} />
+      </div>
+      <div>
+        <div className="label-micro mb-1">5-start rolling FIP</div>
+        <RollingChart data={w5Fip} metricLabel="FIP" metricColor="#facc15" format={(v) => v.toFixed(2)} yDomain={[1, 7]} />
+      </div>
+    </div>
+  );
+}
+
+function ComparablesList({ comparables }: { comparables: ReturnType<typeof findComparables> }) {
+  if (!comparables.length) {
+    return (
+      <div className="px-3 py-6">
+        <Empty title="No comparables available" description="Player not yet qualified for the leaderboard sample." />
+      </div>
+    );
+  }
+  return (
+    <ul className="divide-y divide-line-subtle">
+      {comparables.map((c) => (
+        <li key={c.id}>
+          <Link href={`/player/${c.id}`} className="flex items-center gap-3 px-3 py-2 row-hover">
+            <img src={playerHeadshotUrl(c.id, 60)} alt="" className="w-7 h-7 rounded-full bg-bg-raised object-cover" />
+            <div className="flex-1 min-w-0">
+              <div className="text-sm truncate">{c.name}</div>
+              <div className="text-2xs text-ink-faint truncate">{c.teamName} · {c.pos}</div>
+            </div>
+            <div className="text-right">
+              <div className="stat-num text-sm text-ink">{(c.similarity * 100).toFixed(0)}<span className="text-ink-faint">%</span></div>
+              <div className="stat-num text-2xs text-ink-faint">d={c.distance.toFixed(2)}</div>
+            </div>
+          </Link>
+        </li>
+      ))}
+    </ul>
   );
 }
 
