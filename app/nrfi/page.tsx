@@ -24,7 +24,7 @@ import { Countdown } from '@/components/Countdown';
 import { ymd, shiftYmd } from '@/lib/time';
 import { Shield, Info, ChevronRight } from 'lucide-react';
 
-export const revalidate = 600;
+export const revalidate = 60;
 export const metadata = {
   title: 'NRFI / YRFI',
   description: 'No-Run / Yes-Run First Inning edge finder for the day\'s slate.',
@@ -33,7 +33,8 @@ export const metadata = {
 export default async function NrfiPage({ searchParams }: { searchParams: { date?: string } }) {
   const today = searchParams?.date && /^\d{4}-\d{2}-\d{2}$/.test(searchParams.date) ? searchParams.date : ymd();
   const schedule = await getSchedule(today).catch(() => []);
-  const previews = (schedule[0]?.games ?? []).filter((g) => g.status.abstractGameState === 'Preview');
+  // Include all games (preview, live, final) so predictions persist with grading
+  const previews = schedule[0]?.games ?? [];
   const standings = await getStandings().catch(() => []);
   const allRecords = standings.flatMap((s) => s.teamRecords);
 
@@ -116,6 +117,20 @@ export default async function NrfiPage({ searchParams }: { searchParams: { date?
       };
       const out = predictFirst5(input);
 
+      // Status + actual first-inning result
+      const status = game.status.abstractGameState;
+      const ls = feed?.liveData?.linescore;
+      const innings = ls?.innings ?? [];
+      const firstInning = innings.find((i: any) => i.num === 1);
+      const firstInningRuns = (firstInning?.away?.runs ?? 0) + (firstInning?.home?.runs ?? 0);
+      const currentInning = ls?.currentInning ?? 0;
+      const isTopInning = !!ls?.isTopInning;
+      const outs = ls?.outs ?? 0;
+      const firstInningComplete = status === 'Final' || currentInning > 1 || (currentInning === 1 && !isTopInning && outs >= 3);
+      let nrfiResult: 'pending' | 'live' | 'hit' | 'miss' = 'pending';
+      if (firstInningComplete) nrfiResult = firstInningRuns === 0 ? 'hit' : 'miss';
+      else if (status === 'Live') nrfiResult = 'live';
+
       return {
         gamePk: game.gamePk,
         away: { id: away.id, name: away.name, abbr: feed?.gameData?.teams?.away?.abbreviation },
@@ -132,14 +147,26 @@ export default async function NrfiPage({ searchParams }: { searchParams: { date?
           away: input.awayStarter?.fip,
           home: input.homeStarter?.fip,
         },
+        status: status === 'Final' ? 'final' : status === 'Live' ? 'live' : 'preview',
+        firstInningRuns,
+        firstInningComplete,
+        nrfiResult,
       };
     })
   );
 
-  // NRFI plays = highest pNRFI (best chance of no runs in 1st)
-  // YRFI plays = highest pYRFI (best chance of runs in 1st)
-  const sortedNRFI = [...rows].sort((a, b) => b.pNRFI - a.pNRFI);
-  const sortedYRFI = [...rows].sort((a, b) => b.pYRFI - a.pYRFI);
+  // Sort: live first, then preview by prob desc, then final by prob desc
+  const statusRank = (r: any) => r.status === 'live' ? 0 : r.status === 'preview' ? 1 : 2;
+  const sortedNRFI = [...rows].sort((a, b) => {
+    const sr = statusRank(a) - statusRank(b);
+    if (sr !== 0) return sr;
+    return b.pNRFI - a.pNRFI;
+  });
+  const sortedYRFI = [...rows].sort((a, b) => {
+    const sr = statusRank(a) - statusRank(b);
+    if (sr !== 0) return sr;
+    return b.pYRFI - a.pYRFI;
+  });
 
   return (
     <div className="max-w-[1300px] mx-auto px-4 py-6 space-y-6">
@@ -219,15 +246,28 @@ function NrfiTable({ rows, flavor }: { rows: any[]; flavor: 'nrfi' | 'yrfi' }) {
         <tr className="text-2xs uppercase tracking-micro text-ink-muted border-b border-line">
           <th className="text-left font-medium px-3 py-2">Game</th>
           <th className="text-right font-medium px-2 py-2">{flavor === 'nrfi' ? 'P(NRFI)' : 'P(YRFI)'}</th>
+          <th className="text-right font-medium px-2 py-2">Result</th>
           <th className="text-right font-medium px-2 py-2">Conf.</th>
-          <th className="text-right font-medium px-3 py-2">First pitch</th>
+          <th className="text-right font-medium px-3 py-2">When</th>
         </tr>
       </thead>
       <tbody>
         {rows.map((r) => {
           const prob = flavor === 'nrfi' ? r.pNRFI : r.pYRFI;
+          // For NRFI flavor: hit if nrfiResult === 'hit'. For YRFI: hit if nrfiResult === 'miss'.
+          const tableHit =
+            r.nrfiResult === (flavor === 'nrfi' ? 'hit' : 'miss');
+          const tableMiss =
+            (flavor === 'nrfi' && r.nrfiResult === 'miss') ||
+            (flavor === 'yrfi' && r.nrfiResult === 'hit');
+          const borderCls =
+            r.status === 'live' ? 'border-l-2 border-l-signal-neg' :
+            tableHit ? 'border-l-2 border-l-signal-pos' :
+            tableMiss ? 'border-l-2 border-l-signal-neg' :
+            'border-l-2 border-l-transparent';
+
           return (
-            <tr key={r.gamePk} className="row-hover border-b border-line-subtle last:border-0">
+            <tr key={r.gamePk} className={`row-hover border-b border-line-subtle last:border-0 ${borderCls}`}>
               <td className="px-3 py-1.5">
                 <Link href={`/game/${r.gamePk}`} className="flex items-center gap-2 hover:text-accent">
                   <img src={teamCapLogoUrl(r.away.id)} alt="" className="w-4 h-4 team-logo opacity-80" />
@@ -248,11 +288,26 @@ function NrfiTable({ rows, flavor }: { rows: any[]; flavor: 'nrfi' | 'yrfi' }) {
                 </span>
               </td>
               <td className="text-right px-2 py-1.5">
+                {r.firstInningComplete ? (
+                  <div className="flex flex-col items-end gap-0.5">
+                    <Badge variant={tableHit ? 'pos' : 'neg'}>
+                      {tableHit ? '✓ HIT' : '✗ MISS'}
+                    </Badge>
+                    <span className="text-2xs text-ink-faint stat-num">{r.firstInningRuns}R</span>
+                  </div>
+                ) : r.status === 'live' ? (
+                  <Badge variant="neg" pulse>live</Badge>
+                ) : (
+                  <Badge>pending</Badge>
+                )}
+              </td>
+              <td className="text-right px-2 py-1.5">
                 <ConfidencePill level={r.confidence} score={r.confidenceScore} />
               </td>
               <td className="text-right px-3 py-1.5">
                 <LocalTime iso={r.gameDate} format="time" className="text-2xs text-ink-muted stat-num block" />
-                <Countdown iso={r.gameDate} status="Preview" />
+                {r.status === 'preview' && <Countdown iso={r.gameDate} status="Preview" />}
+                {r.status === 'final' && <span className="text-2xs text-ink-faint">final</span>}
               </td>
             </tr>
           );

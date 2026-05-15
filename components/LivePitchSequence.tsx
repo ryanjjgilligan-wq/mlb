@@ -35,13 +35,13 @@ export function LivePitchSequence({ pitches, count, batterName, pitcherName }: L
     );
   }
   return (
-    <div className="grid grid-cols-1 md:grid-cols-[200px_1fr] gap-4 items-start p-4">
+    <div className="grid grid-cols-1 md:grid-cols-[260px_1fr] gap-6 items-start p-4">
       {/* Strike zone */}
       <div>
-        <div className="label-micro mb-1.5">Pitch locations · this AB</div>
+        <div className="label-micro mb-2">Pitch locations · this AB</div>
         <StrikeZone pitches={pitches} />
         <div className="text-2xs text-ink-faint mt-1.5 text-center">
-          batter view · count <span className="stat-num text-ink-muted">{count.balls}-{count.strikes}</span>
+          catcher's view · count <span className="stat-num text-ink-muted">{count.balls}-{count.strikes}</span> · last pitch glows
         </div>
       </div>
 
@@ -78,58 +78,186 @@ export function LivePitchSequence({ pitches, count, batterName, pitcherName }: L
 }
 
 function StrikeZone({ pitches }: { pitches: LivePitchEvent[] }) {
-  // Standard strike zone: x ∈ [-0.83, 0.83] feet, z ∈ [1.5, 3.5] feet
-  // We'll render in a 200x220 SVG with the zone occupying roughly the center.
-  const W = 200;
-  const H = 220;
-  // Map plate coords to pixel coords. View is from the catcher's POV (or
-  // equivalently, batter's view): positive pX = to the catcher's right, which
-  // for a RHB is inside (toward the batter). We'll keep it untouched: positive
-  // pX = right side of the screen.
-  const xToPx = (pX: number) => W / 2 + pX * 60;
-  const zToPx = (pZ: number) => H - 20 - (pZ - 0) * 38; // ground at H-20, scale ~38px/ft
+  // Standard strike zone: x ∈ [-0.83, 0.83] feet (17"), z ∈ [1.5, 3.5] feet (typical)
+  // Bigger canvas, more detail.
+  const W = 260;
+  const H = 290;
+  const xToPx = (pX: number) => W / 2 + pX * 75;
+  const zToPx = (pZ: number) => H - 30 - (pZ - 0) * 52;
 
   const zoneLeft = xToPx(-0.83);
   const zoneRight = xToPx(0.83);
   const zoneTop = zToPx(3.5);
   const zoneBottom = zToPx(1.5);
+  const zoneW = zoneRight - zoneLeft;
+  const zoneH = zoneBottom - zoneTop;
+
+  // Extended "called" zone — umps tend to call ~1 ball outside the rulebook
+  // zone as a strike (especially low). Show it as a faint outline.
+  const extLeft = xToPx(-0.95);
+  const extRight = xToPx(0.95);
+  const extTop = zToPx(3.65);
+  const extBottom = zToPx(1.4);
+
+  // Filter to only pitches with coords for clean rendering
+  const located = pitches.filter((p) => p.pX !== undefined && p.pZ !== undefined);
 
   return (
     <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H} className="block">
-      {/* Ground */}
-      <line x1="0" y1={H - 20} x2={W} y2={H - 20} stroke="var(--line)" strokeWidth="1" />
-      {/* Zone */}
+      <defs>
+        {/* Strike zone background gradient — subtle radial highlight */}
+        <radialGradient id="zoneBg" cx="50%" cy="50%" r="60%">
+          <stop offset="0%" stopColor="rgba(250, 204, 21, 0.06)" />
+          <stop offset="100%" stopColor="rgba(250, 204, 21, 0.02)" />
+        </radialGradient>
+        {/* Glow filters for each pitch type */}
+        <filter id="pitchGlow">
+          <feGaussianBlur stdDeviation="1.5" result="coloredBlur" />
+          <feMerge>
+            <feMergeNode in="coloredBlur" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+      </defs>
+
+      {/* Background */}
+      <rect width={W} height={H} fill="var(--bg-sunken)" rx="8" />
+
+      {/* Ground line + home plate hint at bottom */}
+      <line x1="20" y1={H - 30} x2={W - 20} y2={H - 30} stroke="var(--line)" strokeWidth="1" />
+      <polygon
+        points={`${W / 2 - 30},${H - 30} ${W / 2 + 30},${H - 30} ${W / 2 + 25},${H - 22} ${W / 2},${H - 12} ${W / 2 - 25},${H - 22}`}
+        fill="var(--bg-raised)"
+        stroke="var(--ink-faint)"
+        strokeWidth="1"
+        opacity="0.7"
+      />
+
+      {/* Extended (called) zone — faint dashed outline */}
+      <rect
+        x={extLeft}
+        y={extTop}
+        width={extRight - extLeft}
+        height={extBottom - extTop}
+        fill="none"
+        stroke="var(--line-strong)"
+        strokeWidth="1"
+        strokeDasharray="3 3"
+        opacity="0.4"
+      />
+
+      {/* Strike zone */}
       <rect
         x={zoneLeft}
         y={zoneTop}
-        width={zoneRight - zoneLeft}
-        height={zoneBottom - zoneTop}
-        fill="var(--bg-raised)"
-        stroke="var(--line-strong)"
-        strokeWidth="1.5"
+        width={zoneW}
+        height={zoneH}
+        fill="url(#zoneBg)"
+        stroke="var(--ink-muted)"
+        strokeWidth="2"
       />
-      {/* Inner ⅓ grid lines */}
-      <line x1={zoneLeft + (zoneRight - zoneLeft) / 3} y1={zoneTop} x2={zoneLeft + (zoneRight - zoneLeft) / 3} y2={zoneBottom} stroke="var(--line)" strokeDasharray="2 2" />
-      <line x1={zoneLeft + 2 * (zoneRight - zoneLeft) / 3} y1={zoneTop} x2={zoneLeft + 2 * (zoneRight - zoneLeft) / 3} y2={zoneBottom} stroke="var(--line)" strokeDasharray="2 2" />
-      <line x1={zoneLeft} y1={zoneTop + (zoneBottom - zoneTop) / 3} x2={zoneRight} y2={zoneTop + (zoneBottom - zoneTop) / 3} stroke="var(--line)" strokeDasharray="2 2" />
-      <line x1={zoneLeft} y1={zoneTop + 2 * (zoneBottom - zoneTop) / 3} x2={zoneRight} y2={zoneTop + 2 * (zoneBottom - zoneTop) / 3} stroke="var(--line)" strokeDasharray="2 2" />
 
-      {/* Pitches */}
-      {pitches.map((p, i) => {
-        if (p.pX === undefined || p.pZ === undefined) return null;
-        const cx = xToPx(p.pX);
-        const cy = zToPx(p.pZ);
-        const r = p.startSpeed ? Math.min(8, Math.max(4, p.startSpeed / 12)) : 5;
+      {/* Inner 3×3 grid */}
+      {[1, 2].map((i) => (
+        <g key={i}>
+          <line
+            x1={zoneLeft + (zoneW * i) / 3}
+            y1={zoneTop}
+            x2={zoneLeft + (zoneW * i) / 3}
+            y2={zoneBottom}
+            stroke="var(--line)"
+            strokeDasharray="2 3"
+          />
+          <line
+            x1={zoneLeft}
+            y1={zoneTop + (zoneH * i) / 3}
+            x2={zoneRight}
+            y2={zoneTop + (zoneH * i) / 3}
+            stroke="var(--line)"
+            strokeDasharray="2 3"
+          />
+        </g>
+      ))}
+
+      {/* Faint sequence trail connecting consecutive pitches */}
+      {located.length > 1 && (
+        <polyline
+          points={located.map((p) => `${xToPx(p.pX!)},${zToPx(p.pZ!)}`).join(' ')}
+          fill="none"
+          stroke="var(--ink-faint)"
+          strokeWidth="1"
+          strokeDasharray="2 2"
+          opacity="0.5"
+        />
+      )}
+
+      {/* Pitches — with shadow halo + colored core + index */}
+      {located.map((p, i) => {
+        const cx = xToPx(p.pX!);
+        const cy = zToPx(p.pZ!);
+        const r = p.startSpeed ? Math.min(11, Math.max(6, p.startSpeed / 10)) : 7;
         const fill = pitchColor(p);
+        const isLast = i === located.length - 1;
         return (
           <g key={i}>
-            <circle cx={cx} cy={cy} r={r} fill={fill} stroke="var(--bg-sunken)" strokeWidth="1" opacity={0.85} />
-            <text x={cx} y={cy + 2.5} textAnchor="middle" fontSize="8" fontFamily="ui-monospace" fontWeight="600" fill="var(--bg)">
+            {/* Soft outer glow */}
+            <circle cx={cx} cy={cy} r={r + 3} fill={fill} opacity="0.18" />
+            {/* Solid core */}
+            <circle
+              cx={cx}
+              cy={cy}
+              r={r}
+              fill={fill}
+              stroke={isLast ? '#fff' : 'var(--bg-sunken)'}
+              strokeWidth={isLast ? 2 : 1.2}
+              filter={isLast ? 'url(#pitchGlow)' : undefined}
+            />
+            {/* Index inside */}
+            <text
+              x={cx}
+              y={cy + r * 0.35}
+              textAnchor="middle"
+              fontSize={r * 0.95}
+              fontFamily="ui-monospace"
+              fontWeight="700"
+              fill="#0a0a0b"
+            >
               {p.index + 1}
             </text>
+            {/* Velocity label slightly offset */}
+            {p.startSpeed && (
+              <text
+                x={cx + r + 4}
+                y={cy + 3}
+                fontSize="8.5"
+                fontFamily="ui-monospace"
+                fill="var(--ink-muted)"
+                opacity="0.85"
+              >
+                {p.startSpeed.toFixed(0)}
+              </text>
+            )}
           </g>
         );
       })}
+
+      {/* Color legend at bottom */}
+      <g transform={`translate(0 ${H - 8})`}>
+        {[
+          { color: '#dc2626', label: 'B' },
+          { color: '#16a34a', label: 'CS' },
+          { color: '#2563eb', label: 'WS' },
+          { color: '#fb923c', label: 'F' },
+          { color: '#facc15', label: 'IP' },
+        ].map((item, i) => (
+          <g key={item.label} transform={`translate(${20 + i * 46} 0)`}>
+            <circle cx={0} cy={0} r="3.5" fill={item.color} />
+            <text x={6} y={3} fontSize="8" fontFamily="ui-monospace" fill="var(--ink-faint)">
+              {item.label}
+            </text>
+          </g>
+        ))}
+      </g>
     </svg>
   );
 }

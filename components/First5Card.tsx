@@ -15,22 +15,59 @@ export type First5CardData = {
   awayStarter?: { id: number; name: string };
   homeStarter?: { id: number; name: string };
   output: First5Output;
+  status?: 'preview' | 'live' | 'final';
+  actual?: {
+    f5Runs: number;
+    f5Complete: boolean;
+    firstInningRuns: number;
+    firstInningComplete: boolean;
+  };
 };
 
 export function First5Card({ d }: { d: First5CardData }) {
   const o = d.output;
+  const status = d.status ?? 'preview';
+
+  // Grade the F5 prediction: line = round projection ± 0.5 → over if actual > line
+  const f5Line = Math.floor(o.expectedTotal) + 0.5;
+  let f5Result: 'pending' | 'live' | 'hit-over' | 'hit-under' | 'push' = 'pending';
+  if (d.actual?.f5Complete) {
+    if (d.actual.f5Runs > f5Line) f5Result = o.expectedTotal > f5Line ? 'hit-over' : 'hit-under';
+    else if (d.actual.f5Runs < f5Line) f5Result = o.expectedTotal < f5Line ? 'hit-over' : 'hit-under';
+    else f5Result = 'push';
+  } else if (status === 'live') {
+    f5Result = 'live';
+  }
+
+  // Grade NRFI
+  let nrfiResult: 'pending' | 'live' | 'hit' | 'miss' = 'pending';
+  if (d.actual?.firstInningComplete) {
+    nrfiResult = d.actual.firstInningRuns === 0 ? 'hit' : 'miss';
+  } else if (status === 'live') {
+    nrfiResult = 'live';
+  }
+
+  // Visual border — green for hit, red for live or final-miss
+  const isHit = f5Result === 'hit-over' || f5Result === 'hit-under';
+  const borderCls =
+    status === 'live' ? 'border-l-2 border-l-signal-neg' :
+    isHit ? 'border-l-2 border-l-signal-pos' :
+    status === 'final' ? 'border-l-2 border-l-signal-neg' :
+    '';
+
   return (
-    <article className="panel overflow-hidden">
+    <article className={`panel overflow-hidden ${borderCls}`}>
       <header className="flex items-center justify-between gap-2 px-3 py-2 border-b border-line bg-bg-raised">
         <div className="flex items-center gap-2 min-w-0">
-          <Badge variant="info">F5</Badge>
+          {status === 'live' ? <Badge variant="neg" pulse>LIVE</Badge> : <Badge variant="info">F5</Badge>}
+          {status === 'final' && <Badge>FINAL</Badge>}
           <span className="text-2xs text-ink-faint stat-num">{d.gamePk}</span>
         </div>
         <div className="flex items-center gap-2 text-2xs text-ink-faint">
           <LocalDate ymd={d.gameDate.slice(0, 10)} className="stat-num" />
           <span>·</span>
           <LocalTime iso={d.gameDate} format="time" className="stat-num" />
-          <Countdown iso={d.gameDate} status="Preview" prefix="· " />
+          {status === 'preview' && <Countdown iso={d.gameDate} status="Preview" prefix="· " />}
         </div>
       </header>
 
@@ -53,6 +90,53 @@ export function First5Card({ d }: { d: First5CardData }) {
             <img src={teamCapLogoUrl(d.home.id)} alt="" className="w-6 h-6 team-logo opacity-90" />
           </Link>
         </div>
+
+        {/* Actual outcomes (live/final games only) */}
+        {d.actual && (
+          <div className="px-3 py-2 -mx-4 border-y border-line-subtle bg-bg-raised/60">
+            <div className="flex items-center justify-between gap-3 text-2xs">
+              <div className="flex items-center gap-3">
+                <span className="label-micro">Actual F5</span>
+                <span className={`stat-num text-base font-semibold ${
+                  f5Result === 'hit-over' || f5Result === 'hit-under' ? 'text-signal-pos' :
+                  f5Result === 'push' ? 'text-ink-muted' :
+                  status === 'final' ? 'text-signal-neg' :
+                  'text-ink'
+                }`}>
+                  {d.actual.f5Runs} R{!d.actual.f5Complete && status === 'live' ? ` (in progress)` : ''}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                {f5Result === 'hit-over' && <Badge variant="pos">✓ over hit</Badge>}
+                {f5Result === 'hit-under' && <Badge variant="pos">✓ under hit</Badge>}
+                {f5Result === 'push' && <Badge>push</Badge>}
+                {f5Result === 'live' && <Badge variant="neg" pulse>live</Badge>}
+                {f5Result === 'pending' && <Badge>pending</Badge>}
+                {status === 'final' && f5Result !== 'hit-over' && f5Result !== 'hit-under' && f5Result !== 'push' && (
+                  <Badge variant="neg">model miss</Badge>
+                )}
+              </div>
+            </div>
+            <div className="flex items-center justify-between gap-3 text-2xs mt-2">
+              <div className="flex items-center gap-3">
+                <span className="label-micro">NRFI</span>
+                <span className={`stat-num text-base font-semibold ${
+                  nrfiResult === 'hit' ? 'text-signal-pos' :
+                  nrfiResult === 'miss' ? 'text-signal-neg' :
+                  'text-ink'
+                }`}>
+                  {d.actual.firstInningRuns} R in 1st
+                </span>
+              </div>
+              <div>
+                {nrfiResult === 'hit' && <Badge variant="pos">✓ NRFI</Badge>}
+                {nrfiResult === 'miss' && <Badge variant="neg">YRFI</Badge>}
+                {nrfiResult === 'live' && <Badge variant="neg" pulse>live</Badge>}
+                {nrfiResult === 'pending' && <Badge>pending</Badge>}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* WP + NRFI + over lines */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">

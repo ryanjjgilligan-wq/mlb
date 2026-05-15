@@ -29,11 +29,14 @@ import {
 } from './predict';
 import { ymd } from './time';
 
+export type GameStatus = 'preview' | 'live' | 'final';
+
 export type GameInsight = {
   gamePk: number;
   away: { id: number; name: string; abbr?: string };
   home: { id: number; name: string; abbr?: string };
   gameDate: string;
+  status: GameStatus;
   venueId?: number;
   venueName?: string;
   weather?: WeatherInput;
@@ -41,26 +44,44 @@ export type GameInsight = {
   awayStarter?: { id: number; name: string; k9?: number };
   homeStarter?: { id: number; name: string; k9?: number };
   awayTravelMiles: number;
+  /** Live/final actuals — undefined for preview games. */
+  actual?: {
+    awayRuns: number;
+    homeRuns: number;
+    total: number;
+    inningsCompleted: number;
+    /** Sum of runs scored across innings 1–5 (partial if mid-game). */
+    f5Runs: number;
+    f5Complete: boolean;
+    /** Runs in the first inning (both halves). */
+    firstInningRuns: number;
+    firstInningComplete: boolean;
+  };
 };
+
+export type OpportunityResult = 'pending' | 'live' | 'hit' | 'miss' | 'push' | 'no-grade';
 
 export type Opportunity = {
   category: 'total-high' | 'total-low' | 'weather' | 'k-matchup' | 'mismatch' | 'park' | 'travel' | 'shootout';
   headline: string;
   subline: string;
   metric: string;
-  /** Plain-English explanation of WHY this is notable and what the user should take away. */
   explanation: string;
-  /** What the model is actually predicting in concrete terms (e.g. "expected total runs: 12.4"). */
   prediction: string;
-  /** First-pitch ISO so the UI can render countdown + local time. */
   firstPitch: string;
   gamePk: number;
   gameLabel: string;
-  importance: number; // 0-100, used for sort + visual weighting
+  importance: number;
   confidence: 'low' | 'medium' | 'high';
-  confidenceScore: number; // 0-100 numeric
+  confidenceScore: number;
   confidenceReasons: string[];
-  probability?: number; // 0-1 if applicable, used for display + threshold
+  probability?: number;
+  /** Game status at the time of building. Drives result color/badge. */
+  status: GameStatus;
+  /** Outcome graded against actual game state (or 'pending' if preview). */
+  result: OpportunityResult;
+  /** Plain-language actual outcome to display alongside the prediction. */
+  actualText?: string;
 };
 
 export async function buildSlateInsights(date?: string): Promise<{
@@ -70,7 +91,9 @@ export async function buildSlateInsights(date?: string): Promise<{
 }> {
   const d = date ?? ymd();
   const schedule = await getSchedule(d).catch(() => []);
-  const games = (schedule[0]?.games ?? []).filter((g) => g.status.abstractGameState === 'Preview');
+  // Include ALL games (preview, live, final) — predictions persist with
+  // grading until the date rolls over.
+  const games = schedule[0]?.games ?? [];
   if (!games.length) {
     return { date: d, games: [], opportunities: [] };
   }
@@ -197,11 +220,45 @@ async function buildGameInsight(
     return ip > 0 ? (k * 9) / ip : undefined;
   };
 
+  // Extract actual state from the live feed
+  const abstractState = game.status.abstractGameState as string;
+  const status: GameStatus = abstractState === 'Final' ? 'final' : abstractState === 'Live' ? 'live' : 'preview';
+  let actual: GameInsight['actual'];
+  if (status !== 'preview') {
+    const ls = feed.liveData?.linescore;
+    const innings: any[] = ls?.innings ?? [];
+    const awayRuns = ls?.teams?.away?.runs ?? 0;
+    const homeRuns = ls?.teams?.home?.runs ?? 0;
+    const total = awayRuns + homeRuns;
+    const f5Innings = innings.slice(0, 5);
+    const f5Runs = f5Innings.reduce((s, i) => s + (i?.away?.runs ?? 0) + (i?.home?.runs ?? 0), 0);
+    const currentInning = ls?.currentInning ?? 0;
+    const isTopInning = !!ls?.isTopInning;
+    const outs = ls?.outs ?? 0;
+    const f5Complete = status === 'final' || currentInning > 5 || (currentInning === 5 && !isTopInning && outs >= 3);
+    const firstInningComplete = status === 'final' || currentInning > 1 || (currentInning === 1 && !isTopInning && outs >= 3);
+    const firstInning = innings.find((i: any) => i.num === 1);
+    const firstInningRuns = (firstInning?.away?.runs ?? 0) + (firstInning?.home?.runs ?? 0);
+    const inningsCompleted = innings.filter((i: any) => i?.away?.runs !== undefined && i?.home?.runs !== undefined).length;
+
+    actual = {
+      awayRuns,
+      homeRuns,
+      total,
+      inningsCompleted,
+      f5Runs,
+      f5Complete,
+      firstInningRuns,
+      firstInningComplete,
+    };
+  }
+
   return {
     gamePk: game.gamePk,
     away: { id: away.id, name: away.name, abbr: feed.gameData?.teams?.away?.abbreviation },
     home: { id: home.id, name: home.name, abbr: feed.gameData?.teams?.home?.abbreviation },
     gameDate: game.gameDate,
+    status,
     venueId,
     venueName: feed.gameData?.venue?.name ?? game.venue?.name,
     weather,
@@ -221,6 +278,7 @@ async function buildGameInsight(
         }
       : undefined,
     awayTravelMiles,
+    actual,
   };
 }
 
@@ -231,7 +289,67 @@ function makeBase(g: GameInsight) {
     firstPitch: g.gameDate,
     confidenceScore: g.prediction.confidence.score,
     confidenceReasons: g.prediction.confidence.reasons,
+    status: g.status,
   };
+}
+
+/**
+ * Grade an opportunity given the game state. For preview games, returns
+ * 'pending'. For live games, returns 'live' (final result not yet known).
+ * For final games, returns 'hit' / 'miss' / 'push' based on category logic.
+ *
+ * Each category has its own implicit market:
+ *   total-high / shootout / weather (positive) / park (high) → over the implied line
+ *   total-low / weather (negative) / park (low) / k-matchup → under the implied line
+ *   mismatch → side ML
+ *   travel → side ML (away under-perform = home ML)
+ */
+function gradeOpportunity(
+  category: Opportunity['category'],
+  g: GameInsight,
+  impliedSide?: 'home' | 'away'
+): { result: OpportunityResult; actualText?: string } {
+  if (g.status === 'preview' || !g.actual) return { result: 'pending' };
+  if (g.status === 'live') {
+    return { result: 'live', actualText: `Live: ${g.actual.total} R through ${g.actual.inningsCompleted} inn` };
+  }
+  // Final
+  const actual = g.actual.total;
+  const projected = g.prediction.expectedTotal;
+  switch (category) {
+    case 'total-high':
+    case 'shootout':
+    case 'park':
+    case 'weather': {
+      // Projected high → we wanted the OVER. Use Math.floor(projected) + 0.5 as the implied line.
+      // For low projected categories the implied line is set via "low" branch.
+      // We'll handle low ones in their own branches; for these "high" categories
+      // we treat projected − 1.5 as the line we'd take the over at.
+      const line = Math.floor(projected) - 0.5; // safety margin
+      const hit = actual > line;
+      return { result: hit ? 'hit' : 'miss', actualText: `Final ${actual} R · proj ${projected.toFixed(1)}` };
+    }
+    case 'total-low':
+    case 'k-matchup': {
+      const line = Math.ceil(projected) + 0.5;
+      const hit = actual < line;
+      return { result: hit ? 'hit' : 'miss', actualText: `Final ${actual} R · proj ${projected.toFixed(1)}` };
+    }
+    case 'mismatch': {
+      const homeWon = g.actual.homeRuns > g.actual.awayRuns;
+      if (impliedSide === 'home') {
+        return { result: homeWon ? 'hit' : 'miss', actualText: `Final ${g.actual.awayRuns}–${g.actual.homeRuns}` };
+      } else if (impliedSide === 'away') {
+        return { result: !homeWon ? 'hit' : 'miss', actualText: `Final ${g.actual.awayRuns}–${g.actual.homeRuns}` };
+      }
+      return { result: 'no-grade', actualText: `Final ${g.actual.awayRuns}–${g.actual.homeRuns}` };
+    }
+    case 'travel': {
+      // Travel disadvantages the visitor → we'd lean home ML
+      const homeWon = g.actual.homeRuns > g.actual.awayRuns;
+      return { result: homeWon ? 'hit' : 'miss', actualText: `Final ${g.actual.awayRuns}–${g.actual.homeRuns}` };
+    }
+  }
 }
 
 function generateOpportunities(insights: GameInsight[]): Opportunity[] {
@@ -241,11 +359,16 @@ function generateOpportunities(insights: GameInsight[]): Opportunity[] {
   const sortedByTotal = [...insights].sort((a, b) => b.prediction.expectedTotal - a.prediction.expectedTotal);
   const median = sortedByTotal[Math.floor(sortedByTotal.length / 2)]?.prediction.expectedTotal ?? 9;
 
+  const pushOpp = (o: Omit<Opportunity, 'result' | 'actualText'>, impliedSide?: 'home' | 'away') => {
+    const grade = gradeOpportunity(o.category, sortedByTotal.find((g) => g.gamePk === o.gamePk)!, impliedSide);
+    opps.push({ ...o, result: grade.result, actualText: grade.actualText });
+  };
+
   for (const g of sortedByTotal) {
     if (g.prediction.confidence.level === 'low') continue;
     const delta = g.prediction.expectedTotal - median;
     if (delta >= 1.5) {
-      opps.push({
+      pushOpp({
         ...makeBase(g),
         category: 'total-high',
         headline: `${g.away.abbr ?? g.away.name} at ${g.home.abbr ?? g.home.name} projects high`,
@@ -259,7 +382,7 @@ function generateOpportunities(insights: GameInsight[]): Opportunity[] {
         confidence: g.prediction.confidence.level,
       });
     } else if (delta <= -1.5) {
-      opps.push({
+      pushOpp({
         ...makeBase(g),
         category: 'total-low',
         headline: `${g.away.abbr ?? g.away.name} at ${g.home.abbr ?? g.home.name} projects low`,
@@ -281,7 +404,7 @@ function generateOpportunities(insights: GameInsight[]): Opportunity[] {
     const pct = (wx.multiplier - 1) * 100;
     if (Math.abs(pct) < 5) continue;
     const direction = pct > 0 ? 'lifting' : 'suppressing';
-    opps.push({
+    pushOpp({
       ...makeBase(g),
       category: 'weather',
       headline: `Weather is ${direction} offense at ${g.venueName ?? g.home.abbr ?? g.home.name}`,
@@ -300,7 +423,7 @@ function generateOpportunities(insights: GameInsight[]): Opportunity[] {
     const aceK9 = Math.max(g.awayStarter?.k9 ?? 0, g.homeStarter?.k9 ?? 0);
     if (aceK9 < 11) continue;
     const ace = (g.awayStarter?.k9 ?? 0) > (g.homeStarter?.k9 ?? 0) ? g.awayStarter! : g.homeStarter!;
-    opps.push({
+    pushOpp({
       ...makeBase(g),
       category: 'k-matchup',
       headline: `${ace.name} on the bump — elite strikeout rate`,
@@ -318,7 +441,7 @@ function generateOpportunities(insights: GameInsight[]): Opportunity[] {
   for (const g of insights) {
     const park = getPark(g.venueId);
     if (park.runs >= 110) {
-      opps.push({
+      pushOpp({
         ...makeBase(g),
         category: 'park',
         headline: `${park.name} is among the league's best hitter parks`,
@@ -332,7 +455,7 @@ function generateOpportunities(insights: GameInsight[]): Opportunity[] {
         confidence: 'high',
       });
     } else if (park.runs <= 92) {
-      opps.push({
+      pushOpp({
         ...makeBase(g),
         category: 'park',
         headline: `${park.name} is among the league's most pitcher-friendly venues`,
@@ -352,7 +475,7 @@ function generateOpportunities(insights: GameInsight[]): Opportunity[] {
     if (g.prediction.confidence.level === 'low') continue;
     const pHome = g.prediction.pHomeWin;
     if (pHome > 0.70) {
-      opps.push({
+      pushOpp({
         ...makeBase(g),
         category: 'mismatch',
         headline: `${g.home.abbr ?? g.home.name} a heavy favorite at home`,
@@ -365,9 +488,9 @@ function generateOpportunities(insights: GameInsight[]): Opportunity[] {
         importance: Math.round(50 + (pHome - 0.5) * 100),
         confidence: g.prediction.confidence.level,
         probability: pHome,
-      });
+      }, 'home');
     } else if (pHome < 0.30) {
-      opps.push({
+      pushOpp({
         ...makeBase(g),
         category: 'mismatch',
         headline: `${g.away.abbr ?? g.away.name} a heavy road favorite`,
@@ -380,7 +503,7 @@ function generateOpportunities(insights: GameInsight[]): Opportunity[] {
         importance: Math.round(50 + (0.5 - pHome) * 100),
         confidence: g.prediction.confidence.level,
         probability: 1 - pHome,
-      });
+      }, 'away');
     }
   }
 
@@ -388,7 +511,7 @@ function generateOpportunities(insights: GameInsight[]): Opportunity[] {
     .filter((g) => g.awayTravelMiles >= 2000)
     .sort((a, b) => b.awayTravelMiles - a.awayTravelMiles)
     .forEach((g) => {
-      opps.push({
+      pushOpp({
         ...makeBase(g),
         category: 'travel',
         headline: `${g.away.abbr ?? g.away.name} on a long road trip`,
@@ -408,7 +531,7 @@ function generateOpportunities(insights: GameInsight[]): Opportunity[] {
     const wx = g.prediction.modifiers.find((m) => m.name === 'Weather')?.multiplier ?? 1;
     const stack = (park.runs / 100) * wx;
     if (stack >= 1.12) {
-      opps.push({
+      pushOpp({
         ...makeBase(g),
         category: 'shootout',
         headline: `Shootout setup at ${park.name}`,
@@ -424,10 +547,22 @@ function generateOpportunities(insights: GameInsight[]): Opportunity[] {
     }
   }
 
+  // Sort: live first, then pending, then graded (hits before misses for receipts)
+  const statusRank = (o: Opportunity) =>
+    o.status === 'live' ? 0 : o.status === 'preview' ? 1 : 2;
+  const resultRank = (o: Opportunity) =>
+    o.result === 'live' ? 0 : o.result === 'pending' ? 1 : o.result === 'hit' ? 2 : o.result === 'miss' ? 3 : 4;
+
   return opps
     .filter((o) => o.confidence !== 'low')
-    .sort((a, b) => b.importance - a.importance)
-    .slice(0, 24);
+    .sort((a, b) => {
+      const sr = statusRank(a) - statusRank(b);
+      if (sr !== 0) return sr;
+      const rr = resultRank(a) - resultRank(b);
+      if (rr !== 0) return rr;
+      return b.importance - a.importance;
+    })
+    .slice(0, 32); // Allow more entries since finals are now included as receipts
 }
 
 function gameLabel(g: GameInsight): string {

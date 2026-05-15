@@ -11,7 +11,7 @@ import { Countdown } from '@/components/Countdown';
 import { ymd, shiftYmd } from '@/lib/time';
 import { Sparkles, TrendingUp, TrendingDown, CloudRain, Zap, AlertTriangle, MapPin, Plane, Flame, ChevronRight, Info } from 'lucide-react';
 
-export const revalidate = 600;
+export const revalidate = 60;
 export const metadata = {
   title: 'Opportunities',
   description: "Notable stats and edges across today's MLB slate, explained.",
@@ -154,8 +154,14 @@ function OpportunityCard({ opp, rank }: { opp: Opportunity; rank: number }) {
   const meta = META[opp.category];
   const Icon = meta.icon;
   const conf = opp.confidenceScore;
+  const resultColor =
+    opp.result === 'hit' ? 'border-l-signal-pos' :
+    opp.result === 'miss' ? 'border-l-signal-neg' :
+    opp.result === 'live' ? 'border-l-signal-neg' :
+    opp.result === 'push' ? 'border-l-ink-muted' :
+    'border-l-transparent';
   return (
-    <article className="panel overflow-hidden">
+    <article className={`panel overflow-hidden border-l-2 ${resultColor}`}>
       {/* Header strip */}
       <header className="flex items-center justify-between gap-2 px-4 py-2.5 border-b border-line bg-bg-raised">
         <div className="flex items-center gap-2 min-w-0">
@@ -164,7 +170,10 @@ function OpportunityCard({ opp, rank }: { opp: Opportunity; rank: number }) {
           <span className="text-2xs uppercase tracking-micro font-medium text-ink">{meta.label}</span>
           <span className="text-2xs text-ink-faint truncate hidden md:inline">· {meta.sublabel}</span>
         </div>
-        <Badge variant={meta.chip} className="shrink-0 stat-num">{opp.metric}</Badge>
+        <div className="flex items-center gap-2 shrink-0">
+          <ResultBadge result={opp.result} />
+          <Badge variant={meta.chip} className="stat-num">{opp.metric}</Badge>
+        </div>
       </header>
 
       <div className="p-4 space-y-3">
@@ -180,6 +189,18 @@ function OpportunityCard({ opp, rank }: { opp: Opportunity; rank: number }) {
           <span className="label-micro">Model says</span>
           <span className="text-sm text-ink stat-num">{opp.prediction}</span>
         </div>
+
+        {/* Actual line — only shown for live/final games */}
+        {opp.actualText && (
+          <div className="flex items-baseline justify-between gap-3">
+            <span className="label-micro">Actual</span>
+            <span className={`text-sm stat-num ${
+              opp.result === 'hit' ? 'text-signal-pos' :
+              opp.result === 'miss' ? 'text-signal-neg' :
+              opp.result === 'live' ? 'text-signal-neg' : 'text-ink-muted'
+            }`}>{opp.actualText}</span>
+          </div>
+        )}
 
         {/* Confidence bar */}
         <div>
@@ -233,6 +254,15 @@ function OpportunityCard({ opp, rank }: { opp: Opportunity; rank: number }) {
       </div>
     </article>
   );
+}
+
+function ResultBadge({ result }: { result: Opportunity['result'] }) {
+  if (result === 'pending') return <Badge>pending</Badge>;
+  if (result === 'live') return <Badge variant="neg" pulse>LIVE</Badge>;
+  if (result === 'hit') return <Badge variant="pos">✓ HIT</Badge>;
+  if (result === 'miss') return <Badge variant="neg">✗ MISS</Badge>;
+  if (result === 'push') return <Badge>push</Badge>;
+  return <Badge>—</Badge>;
 }
 
 function DateNav({ today }: { today: string }) {

@@ -18,7 +18,7 @@ import { First5Card, type First5CardData } from '@/components/First5Card';
 import { ymd, shiftYmd } from '@/lib/time';
 import { Hourglass, Info } from 'lucide-react';
 
-export const revalidate = 600;
+export const revalidate = 60;
 export const metadata = {
   title: 'First 5',
   description: 'First-5-inning predictions for every preview MLB game on the slate.',
@@ -27,7 +27,8 @@ export const metadata = {
 export default async function First5Page({ searchParams }: { searchParams: { date?: string } }) {
   const today = searchParams?.date && /^\d{4}-\d{2}-\d{2}$/.test(searchParams.date) ? searchParams.date : ymd();
   const schedule = await getSchedule(today).catch(() => []);
-  const previews = (schedule[0]?.games ?? []).filter((g) => g.status.abstractGameState === 'Preview');
+  // Include all games (preview, live, final) so predictions persist with grading
+  const previews = schedule[0]?.games ?? [];
   const standings = await getStandings().catch(() => []);
   const allRecords = standings.flatMap((s) => s.teamRecords);
 
@@ -100,12 +101,38 @@ export default async function First5Page({ searchParams }: { searchParams: { dat
           ? { id: game.teams.home.probablePitcher.id, name: game.teams.home.probablePitcher.fullName }
           : undefined,
         output,
+        // Status + actual F5 results
+        status: (() => {
+          const s = game.status.abstractGameState;
+          return s === 'Final' ? 'final' : s === 'Live' ? 'live' : 'preview';
+        })() as 'preview' | 'live' | 'final',
+        actual: (() => {
+          const status = game.status.abstractGameState;
+          if (status === 'Preview') return undefined;
+          const ls = feed?.liveData?.linescore;
+          const innings = ls?.innings ?? [];
+          const f5 = innings.slice(0, 5).reduce((s: number, i: any) => s + (i?.away?.runs ?? 0) + (i?.home?.runs ?? 0), 0);
+          const currentInning = ls?.currentInning ?? 0;
+          const isTopInning = !!ls?.isTopInning;
+          const outs = ls?.outs ?? 0;
+          const f5Complete = status === 'Final' || currentInning > 5 || (currentInning === 5 && !isTopInning && outs >= 3);
+          const firstInning = innings.find((i: any) => i.num === 1);
+          const firstInningRuns = (firstInning?.away?.runs ?? 0) + (firstInning?.home?.runs ?? 0);
+          const firstInningComplete = status === 'Final' || currentInning > 1 || (currentInning === 1 && !isTopInning && outs >= 3);
+          return { f5Runs: f5, f5Complete, firstInningRuns, firstInningComplete };
+        })(),
       };
     })
   );
 
-  // Sort by predicted total descending so notable shootouts surface first
-  cards.sort((a, b) => b.output.expectedTotal - a.output.expectedTotal);
+  // Sort: live first, then preview by first pitch, then final
+  cards.sort((a: any, b: any) => {
+    const sr = (s: any) => s === 'live' ? 0 : s === 'preview' ? 1 : 2;
+    const r = sr(a.status) - sr(b.status);
+    if (r !== 0) return r;
+    if (a.status === 'preview') return a.gameDate.localeCompare(b.gameDate);
+    return b.output.expectedTotal - a.output.expectedTotal;
+  });
 
   return (
     <div className="max-w-[1400px] mx-auto px-4 py-6 space-y-6">
