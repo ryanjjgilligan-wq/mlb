@@ -611,17 +611,31 @@ export default async function GamePage({ params }: { params: { id: string } }) {
           </div>
         </Panel>
 
-        {/* Win probability chart (live or final) */}
+        {/* Win probability chart — always shows our pre-game projection as a
+             baseline, then layers the live MLB curve once it begins publishing. */}
         <Panel
           className="lg:col-span-7"
-          title="Live win probability"
+          title={
+            <span className="flex items-center gap-2">
+              {wpPoints.length ? 'Live win probability' : 'Pre-game win probability'}
+              {isLive && <Badge variant="neg" pulse>LIVE</Badge>}
+            </span>
+          }
           subtitle={
             wpPoints.length
-              ? `${wpPoints.length} plays · recalculated each pitch`
-              : 'Awaiting first pitch'
+              ? `${wpPoints.length} plays · recalculated each pitch · refreshes every 5s`
+              : isLive
+              ? 'Live updates every 5s once MLB starts publishing per-play win probability'
+              : `Pre-game projection · home ${(runTotal.pHomeWin * 100).toFixed(1)}% from the run-total model`
           }
         >
-          <WinProbChart data={wpPoints} awayName={away.teamName} homeName={home.teamName} />
+          <WinProbChart
+            data={wpPoints}
+            awayName={away.teamName}
+            homeName={home.teamName}
+            preGameHomeWP={runTotal.pHomeWin}
+            isLive={isLive}
+          />
         </Panel>
 
         {/* Run total predictor — full transparency on inputs */}
