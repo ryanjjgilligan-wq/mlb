@@ -2,12 +2,10 @@
 
 import { useEffect, useState } from 'react';
 import {
-  Area,
   ComposedChart,
   Line,
   ResponsiveContainer,
   ReferenceLine,
-  ReferenceArea,
   Tooltip,
   XAxis,
   YAxis,
@@ -20,6 +18,11 @@ export type WPPoint = {
   homeWP: number; // 0–1
   desc?: string;
 };
+
+// Team line colors — kalshi-style two-line chart
+const HOME_COLOR = '#34d399'; // mint green
+const AWAY_COLOR = '#ec4899'; // hot pink/magenta
+const BASELINE_COLOR = '#facc15';
 
 /**
  * Win probability chart.
@@ -64,28 +67,44 @@ export function WinProbChart({
   const showingPreGameOnly = data.length === 0;
   const baseline = preGameHomeWP ?? 0.5;
 
-  // Build the chart series. We synthesize a baseline value at every X point
-  // so we can draw it as its own line layered with the live curve.
-  // Pre-game only: one point per inning (1..9) all at baseline.
-  // Live: every actual play point with the baseline carried alongside.
-  type Row = { idx: number; inning: number; half?: string; homeWP: number; baseline: number; desc?: string };
+  // Build chart series — two distinct curves per team. Pre-game is flat at
+  // the baseline for both teams. Live curves move opposite each other.
+  type Row = {
+    idx: number;
+    inning: number;
+    half?: string;
+    homeWP: number;
+    awayWP: number;
+    homeBaseline?: number;
+    awayBaseline?: number;
+    desc?: string;
+  };
+  const awayBaseline = preGameHomeWP != null ? 1 - preGameHomeWP : 0.5;
+
   const chartData: Row[] = showingPreGameOnly
     ? Array.from({ length: 10 }, (_, i) => ({
         idx: i,
         inning: i,
         homeWP: baseline,
-        baseline,
+        awayWP: 1 - baseline,
+        homeBaseline: baseline,
+        awayBaseline,
         desc: 'Pre-game projection',
       }))
-    : data.map((d) => ({ ...d, baseline }));
+    : data.map((d) => ({
+        ...d,
+        awayWP: 1 - d.homeWP,
+        homeBaseline: baseline,
+        awayBaseline,
+      }));
 
   const homeWPNow = chartData.length > 0 ? chartData[chartData.length - 1].homeWP : baseline;
-  const drift = homeWPNow - baseline; // positive = model behind, negative = model behind for away
+  const awayWPNow = 1 - homeWPNow;
+  const drift = homeWPNow - baseline;
 
-  // Compute approximate inning ticks for the X axis using the data points
+  // Compute inning ticks for the X axis from the data points
   const inningTicks = (() => {
     if (showingPreGameOnly) return [1, 2, 3, 4, 5, 6, 7, 8, 9];
-    // For live data, find the first idx where each inning begins
     const seen = new Set<number>();
     const ticks: number[] = [];
     for (const p of chartData) {
@@ -97,23 +116,36 @@ export function WinProbChart({
     return ticks;
   })();
 
+  // Custom dot at the line tail — only for the last data point
+  const lastIdx = chartData.length - 1;
+  const makeTailDot = (color: string) => {
+    const TailDot = (props: any) => {
+      if (props.index !== lastIdx) return <g />;
+      return (
+        <g>
+          <circle cx={props.cx} cy={props.cy} r="6" fill={color} fillOpacity="0.18" />
+          <circle cx={props.cx} cy={props.cy} r="3.5" fill={color} stroke="var(--bg)" strokeWidth="1.5" />
+        </g>
+      );
+    };
+    TailDot.displayName = `TailDot(${color})`;
+    return TailDot;
+  };
+
   return (
     <div className="space-y-3">
-      {/* Header strip: current WP big numbers + live freshness */}
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-4">
-          <div>
-            <div className="label-micro">{awayName}</div>
-            <div className={`stat-num text-xl font-semibold ${homeWPNow < 0.5 ? 'text-signal-pos' : 'text-ink-muted'}`}>
-              {((1 - homeWPNow) * 100).toFixed(1)}%
-            </div>
+      {/* Top header — Kalshi-style team chips with color dots + percentages */}
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-5">
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full" style={{ background: AWAY_COLOR }} />
+            <span className="text-2xs uppercase tracking-micro text-ink-muted">{awayName}</span>
+            <span className="stat-num text-base font-semibold text-ink">{(awayWPNow * 100).toFixed(1)}%</span>
           </div>
-          <div className="text-ink-faint text-2xs">vs</div>
-          <div>
-            <div className="label-micro">{homeName}</div>
-            <div className={`stat-num text-xl font-semibold ${homeWPNow >= 0.5 ? 'text-signal-pos' : 'text-ink-muted'}`}>
-              {(homeWPNow * 100).toFixed(1)}%
-            </div>
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full" style={{ background: HOME_COLOR }} />
+            <span className="text-2xs uppercase tracking-micro text-ink-muted">{homeName}</span>
+            <span className="stat-num text-base font-semibold text-ink">{(homeWPNow * 100).toFixed(1)}%</span>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -146,38 +178,23 @@ export function WinProbChart({
 
       <div className="h-64">
         <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={chartData} margin={{ top: 16, right: 12, left: 0, bottom: 22 }}>
-            <defs>
-              <linearGradient id="wpHomeFill" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#34d399" stopOpacity="0.45" />
-                <stop offset="50%" stopColor="#34d399" stopOpacity="0.15" />
-                <stop offset="100%" stopColor="#34d399" stopOpacity="0" />
-              </linearGradient>
-              <linearGradient id="wpAwayFill" x1="0" y1="1" x2="0" y2="0">
-                <stop offset="0%" stopColor="#f87171" stopOpacity="0.45" />
-                <stop offset="50%" stopColor="#f87171" stopOpacity="0.15" />
-                <stop offset="100%" stopColor="#f87171" stopOpacity="0" />
-              </linearGradient>
-            </defs>
+          <ComposedChart data={chartData} margin={{ top: 12, right: 50, left: 0, bottom: 22 }}>
+            {/* 50% center line — break-even */}
+            <ReferenceLine y={0.5} stroke="#3a3a42" strokeDasharray="3 4" strokeWidth={1} />
 
-            {/* Background tint zones — subtle "home leads" green up top, "away leads" red bottom */}
-            <ReferenceArea y1={0.5} y2={1} fill="#34d399" fillOpacity={0.025} />
-            <ReferenceArea y1={0} y2={0.5} fill="#f87171" fillOpacity={0.025} />
-
-            {/* Y axis */}
+            {/* Y-axis on the right (Kalshi style) */}
             <YAxis
+              orientation="right"
               domain={[0, 1]}
               ticks={[0, 0.25, 0.5, 0.75, 1]}
-              tickFormatter={(v) =>
-                v === 0 ? '0%' : v === 1 ? '100%' : v === 0.5 ? '50%' : `${Math.round(v * 100)}`
-              }
+              tickFormatter={(v) => `${Math.round(v * 100)}%`}
               tick={{ fill: '#62626b', fontSize: 10 }}
-              axisLine={{ stroke: '#1f1f24' }}
+              axisLine={false}
               tickLine={false}
               width={40}
             />
 
-            {/* X axis — inning labels */}
+            {/* X-axis — inning labels at the bottom */}
             <XAxis
               dataKey="idx"
               type="number"
@@ -187,36 +204,40 @@ export function WinProbChart({
                 const tickIdx = inningTicks.indexOf(Number(v));
                 return tickIdx >= 0 ? ordinal(tickIdx + 1) : '';
               }}
-              tick={{ fill: '#62626b', fontSize: 9 }}
-              axisLine={{ stroke: '#1f1f24' }}
+              tick={{ fill: '#62626b', fontSize: 10 }}
+              axisLine={false}
               tickLine={false}
-              padding={{ left: 4, right: 4 }}
+              padding={{ left: 8, right: 16 }}
             />
 
-            {/* 50% center line */}
-            <ReferenceLine y={0.5} stroke="#3a3a42" strokeDasharray="3 3" strokeWidth={1} />
-
-            {/* Pre-game baseline — yellow dashed reference line */}
-            {preGameHomeWP != null && (
-              <ReferenceLine
-                y={preGameHomeWP}
-                stroke="#facc15"
-                strokeDasharray="5 4"
-                strokeOpacity={0.7}
-                label={{
-                  value: `pre-game · ${(preGameHomeWP * 100).toFixed(0)}%`,
-                  fill: '#facc15',
-                  fontSize: 9,
-                  position: 'insideTopRight',
-                  offset: 4,
-                }}
-              />
-            )}
-
-            {/* Vertical inning grid lines (subtle) */}
+            {/* Vertical inning grid lines */}
             {inningTicks.map((tick) => (
-              <ReferenceLine key={tick} x={tick} stroke="#1f1f24" strokeDasharray="2 4" strokeOpacity={0.6} />
+              <ReferenceLine
+                key={tick}
+                x={tick}
+                stroke="#1f1f24"
+                strokeDasharray="2 4"
+                strokeOpacity={0.7}
+              />
             ))}
+
+            {/* Pre-game baseline reference (faint dashed for context) */}
+            {preGameHomeWP != null && !showingPreGameOnly && (
+              <>
+                <ReferenceLine
+                  y={preGameHomeWP}
+                  stroke={HOME_COLOR}
+                  strokeDasharray="3 5"
+                  strokeOpacity={0.35}
+                />
+                <ReferenceLine
+                  y={1 - preGameHomeWP}
+                  stroke={AWAY_COLOR}
+                  strokeDasharray="3 5"
+                  strokeOpacity={0.35}
+                />
+              </>
+            )}
 
             <Tooltip
               cursor={{ stroke: '#2a2a31' }}
@@ -227,70 +248,81 @@ export function WinProbChart({
                 fontSize: 11,
                 padding: '6px 8px',
               }}
-              labelStyle={{ display: 'none' }}
-              formatter={(value: number, _n, props) => {
+              labelFormatter={() => ''}
+              formatter={(value: number, name: string, props) => {
                 const p = props.payload as Row;
-                return [
-                  `${homeName}: ${(value * 100).toFixed(1)}% / ${awayName}: ${((1 - value) * 100).toFixed(1)}%`,
-                  p.desc ?? '',
-                ];
+                const team = name === 'homeWP' ? homeName : awayName;
+                return [`${team}: ${(value * 100).toFixed(1)}%`, p.desc ?? ''];
               }}
             />
 
-            {/* Above-50% home-leading area (only meaningful for live data) */}
-            {!showingPreGameOnly && (
-              <Area
-                type="monotone"
-                dataKey="homeWP"
-                stroke="none"
-                fill="url(#wpHomeFill)"
-                isAnimationActive={false}
-                connectNulls
-              />
+            {/* Pre-game flat baselines — only when no live data */}
+            {showingPreGameOnly && (
+              <>
+                <Line
+                  type="monotone"
+                  dataKey="homeWP"
+                  stroke={HOME_COLOR}
+                  strokeWidth={2}
+                  strokeDasharray="6 4"
+                  dot={false}
+                  isAnimationActive={false}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="awayWP"
+                  stroke={AWAY_COLOR}
+                  strokeWidth={2}
+                  strokeDasharray="6 4"
+                  dot={false}
+                  isAnimationActive={false}
+                />
+              </>
             )}
 
-            {/* Pre-game baseline as a flat dashed line (always present) */}
-            <Line
-              type="monotone"
-              dataKey="baseline"
-              stroke="#facc15"
-              strokeWidth={showingPreGameOnly ? 2.5 : 1.4}
-              strokeDasharray={showingPreGameOnly ? '6 4' : '5 4'}
-              dot={false}
-              isAnimationActive={false}
-            />
-
-            {/* Live WP line on top */}
+            {/* Live curves — solid lines, dot marker at the tail */}
             {!showingPreGameOnly && (
-              <Line
-                type="monotone"
-                dataKey="homeWP"
-                stroke="#34d399"
-                strokeWidth={2.2}
-                dot={false}
-                isAnimationActive={false}
-              />
+              <>
+                <Line
+                  type="monotone"
+                  dataKey="homeWP"
+                  stroke={HOME_COLOR}
+                  strokeWidth={2}
+                  dot={makeTailDot(HOME_COLOR)}
+                  isAnimationActive={false}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="awayWP"
+                  stroke={AWAY_COLOR}
+                  strokeWidth={2}
+                  dot={makeTailDot(AWAY_COLOR)}
+                  isAnimationActive={false}
+                />
+              </>
             )}
           </ComposedChart>
         </ResponsiveContainer>
       </div>
 
-      {/* Legend bar */}
+      {/* Compact footer legend */}
       <div className="flex items-center justify-between gap-3 text-2xs text-ink-faint">
-        <div className="flex items-center gap-3 flex-wrap">
-          {!showingPreGameOnly && (
-            <span className="flex items-center gap-1.5">
-              <span className="w-3 h-0.5 bg-signal-pos rounded" /> Live home WP
-            </span>
-          )}
+        <div className="flex items-center gap-4 flex-wrap">
           <span className="flex items-center gap-1.5">
-            <span className="w-3 h-0.5 bg-accent rounded" style={{ backgroundImage: 'repeating-linear-gradient(90deg, #facc15 0 4px, transparent 4px 7px)' }} /> Pre-game projection
+            <span className="w-3 h-0.5" style={{ background: HOME_COLOR }} /> {homeName} {showingPreGameOnly ? 'pre-game' : 'live'}
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="w-3 h-0.5" style={{ background: AWAY_COLOR }} /> {awayName} {showingPreGameOnly ? 'pre-game' : 'live'}
           </span>
           <span className="flex items-center gap-1.5">
             <span className="w-3 h-px bg-ink-faint" /> 50% break-even
           </span>
+          {!showingPreGameOnly && preGameHomeWP != null && (
+            <span className="flex items-center gap-1.5">
+              <span className="w-3 h-px border-t border-dashed border-ink-faint" /> pre-game baselines
+            </span>
+          )}
         </div>
-        <span className="hidden sm:inline">{homeName.toUpperCase()} above · {awayName.toUpperCase()} below</span>
       </div>
     </div>
   );

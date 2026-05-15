@@ -27,6 +27,8 @@ import { GameInfoCard } from '@/components/GameInfoCard';
 import { TeamStatsCompare } from '@/components/TeamStatsCompare';
 import { ScoringSummary } from '@/components/ScoringSummary';
 import { LastPlayCard } from '@/components/LastPlayCard';
+import { LiveStatsStrip } from '@/components/LiveStatsStrip';
+import { liveProjectedTotal, gradeNRFI, gradeF5 } from '@/lib/liveAdjust';
 import type { LiveGameState } from '@/lib/liveAdjust';
 import { H2HPanel } from '@/components/H2HPanel';
 import { BvPMatrix } from '@/components/BvPMatrix';
@@ -450,29 +452,54 @@ export default async function GamePage({ params }: { params: { id: string } }) {
         </div>
       </div>
 
-      {/* Game Information — always shown */}
-      <Panel title="Game Information" subtitle="Venue · time · weather · umpire crew">
-        <GameInfoCard
-          d={{
-            venueId: gameData.venue?.id,
-            venueName: gameData.venue?.name,
-            venueCity: gameData.venue?.location?.city,
-            venueState: gameData.venue?.location?.stateAbbrev || gameData.venue?.location?.state,
-            gameDate: gameData.datetime?.dateTime ?? gameData.datetime?.officialDate ?? new Date().toISOString(),
-            broadcastNote: (() => {
-              const bc = liveData?.boxscore?.info?.find((i: any) => /tv|coverage/i.test(i.label ?? ''));
-              return bc?.value;
-            })(),
-            weather: gameData.weather,
-            umpires: ((boxscore?.officials ?? []) as any[])
-              .map((o) => ({ type: o.officialType ?? 'Umpire', name: o.official?.fullName ?? '—' })),
-          }}
-        />
-      </Panel>
-
       {/* Live cockpit — only renders when game is in progress */}
-      {isLive && linescore && (
+      {isLive && linescore && (() => {
+        // Compute live state once for reuse across the cockpit panels
+        const liveState: any = {
+          inning: linescore.currentInning ?? 0,
+          isTopInning: !!linescore.isTopInning,
+          outs: linescore.outs ?? 0,
+          awayRuns: linescore.teams?.away?.runs ?? 0,
+          homeRuns: linescore.teams?.home?.runs ?? 0,
+          innings: (linescore.innings ?? []).map((i: any) => ({
+            num: i.num,
+            away: { runs: i.away?.runs },
+            home: { runs: i.home?.runs },
+          })),
+        };
+        const liveProj = liveProjectedTotal(runTotal.expectedTotal, liveState);
+        const f5Line = Math.floor(first5.expectedTotal) + 0.5;
+        const f5Grade = gradeF5(liveState, f5Line, 'over');
+        const nrfiResult = gradeNRFI(liveState);
+        // Live home WP from the most recent WP point
+        const liveHomeWP = wpPoints.length ? wpPoints[wpPoints.length - 1].homeWP : undefined;
+
+        return (
         <>
+          {/* Live stats strip — 4 hero tiles for the most-important "right now" numbers */}
+          <LiveStatsStrip
+            d={{
+              liveTotal: liveProj.live,
+              preGameTotal: runTotal.expectedTotal,
+              homeWPLive: liveHomeWP,
+              homeWPPreGame: runTotal.pHomeWin,
+              homeAbbr: gameData.teams?.home?.abbreviation ?? home.teamName,
+              awayAbbr: gameData.teams?.away?.abbreviation ?? away.teamName,
+              f5Result: (f5Grade.result === 'pending'
+                ? 'pending'
+                : f5Grade.result === 'push'
+                ? 'push'
+                : f5Grade.result === 'win'
+                ? 'over'
+                : 'under') as any,
+              f5Runs: f5Grade.f5Runs ?? 0,
+              f5Line,
+              f5Complete: f5Grade.result !== 'pending',
+              nrfiResult: (nrfiResult === 'win' ? 'hit' : nrfiResult === 'loss' ? 'miss' : nrfiResult) as any,
+              nrfiPreGame: first5.pNRFI,
+            }}
+          />
+
           {/* Pitcher vs Batter matchup card — broadcast-style */}
           {(() => {
             const pitcher = linescore.defense?.pitcher;
@@ -672,7 +699,8 @@ export default async function GamePage({ params }: { params: { id: string } }) {
             />
           </Panel>
         </>
-      )}
+        );
+      })()}
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
         {/* Pre-game projection (always shown, marked clearly) */}
@@ -1227,6 +1255,26 @@ export default async function GamePage({ params }: { params: { id: string } }) {
           </>
         )}
       </div>
+
+      {/* Game Information — pushed to the bottom; reference info, not headline */}
+      <Panel title="Game Information" subtitle="Venue · time · weather · umpire crew">
+        <GameInfoCard
+          d={{
+            venueId: gameData.venue?.id,
+            venueName: gameData.venue?.name,
+            venueCity: gameData.venue?.location?.city,
+            venueState: gameData.venue?.location?.stateAbbrev || gameData.venue?.location?.state,
+            gameDate: gameData.datetime?.dateTime ?? gameData.datetime?.officialDate ?? new Date().toISOString(),
+            broadcastNote: (() => {
+              const bc = liveData?.boxscore?.info?.find((i: any) => /tv|coverage/i.test(i.label ?? ''));
+              return bc?.value;
+            })(),
+            weather: gameData.weather,
+            umpires: ((boxscore?.officials ?? []) as any[])
+              .map((o) => ({ type: o.officialType ?? 'Umpire', name: o.official?.fullName ?? '—' })),
+          }}
+        />
+      </Panel>
     </div>
   );
 }
