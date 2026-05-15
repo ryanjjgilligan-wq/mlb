@@ -376,6 +376,94 @@ export async function getTeamMonthlyPitching(teamId: number, season?: number): P
   return data?.stats?.[0]?.splits ?? [];
 }
 
+/**
+ * League-wide aggregate hitting and pitching for a season — the context
+ * needed to compute wRC+, OPS+, ERA−.
+ *
+ * Returns simple aggregate rate + a derived runs-per-PA constant suitable
+ * for league-context normalization.
+ */
+export async function getLeagueContext(season?: number) {
+  const s = season ?? new Date().getFullYear();
+  const data = await get<any>(
+    `/teams/stats?sportId=1&season=${s}&group=hitting,pitching&stats=season`,
+    { revalidate: 3600 }
+  ).catch(() => null);
+  const hittingSplits = data?.stats?.find((g: any) => g.group?.displayName === 'hitting')?.splits ?? [];
+  const pitchingSplits = data?.stats?.find((g: any) => g.group?.displayName === 'pitching')?.splits ?? [];
+
+  const sumHit = (k: string) => hittingSplits.reduce((s: number, sp: any) => s + (Number(sp.stat?.[k]) || 0), 0);
+  const sumPit = (k: string) => pitchingSplits.reduce((s: number, sp: any) => s + (Number(sp.stat?.[k]) || 0), 0);
+
+  const lgPA = sumHit('plateAppearances');
+  const lgAB = sumHit('atBats');
+  const lgR = sumHit('runs');
+  const lgH = sumHit('hits');
+  const lgBB = sumHit('baseOnBalls');
+  const lgHBP = sumHit('hitByPitch');
+  const lgSF = sumHit('sacFlies');
+  const lgHR = sumHit('homeRuns');
+  const lgIP_decimal = pitchingSplits.reduce((acc: number, sp: any) => {
+    const ip = String(sp.stat?.inningsPitched ?? '0');
+    const dot = ip.indexOf('.');
+    if (dot < 0) return acc + (parseFloat(ip) || 0);
+    return acc + (parseInt(ip.slice(0, dot), 10) || 0) + (parseInt(ip.slice(dot + 1), 10) || 0) / 3;
+  }, 0);
+  const lgER = sumPit('earnedRuns');
+  const lgERA = lgIP_decimal > 0 ? (lgER * 9) / lgIP_decimal : 4.5;
+
+  // League OBP and SLG
+  const lgOBP = (lgH + lgBB + lgHBP) / Math.max(1, lgAB + lgBB + lgHBP + lgSF);
+  const singles = lgH - sumHit('doubles') - sumHit('triples') - lgHR;
+  const lgTB = singles + 2 * sumHit('doubles') + 3 * sumHit('triples') + 4 * lgHR;
+  const lgSLG = lgAB > 0 ? lgTB / lgAB : 0.4;
+  const lgOPS = lgOBP + lgSLG;
+
+  // League wOBA using the same static linear weights as elsewhere
+  const wOBA_NUM =
+    0.696 * (lgBB - sumHit('intentionalWalks')) +
+    0.728 * lgHBP +
+    0.883 * singles +
+    1.244 * sumHit('doubles') +
+    1.569 * sumHit('triples') +
+    2.004 * lgHR;
+  const wOBA_DEN = lgAB + lgBB - sumHit('intentionalWalks') + lgSF + lgHBP;
+  const lgWOBA = wOBA_DEN > 0 ? wOBA_NUM / wOBA_DEN : 0.310;
+
+  return {
+    season: s,
+    lgPA, lgAB, lgR, lgH, lgBB, lgHBP, lgSF, lgHR,
+    lgOBP, lgSLG, lgOPS, lgWOBA, lgIP: lgIP_decimal, lgER, lgERA,
+    runsPerPA: lgPA > 0 ? lgR / lgPA : 0.117,
+    // Standard wOBA scale — used for wRC+
+    wOBAScale: 1.157, // recent multi-year average
+  };
+}
+
+/** Recent transactions across MLB. Source: MLB Stats API /transactions. */
+export async function getTransactions(days = 5): Promise<any[]> {
+  const today = new Date();
+  const start = new Date(today.getTime() - days * 86_400_000);
+  const fmt = (d: Date) => d.toISOString().slice(0, 10);
+  const data = await get<{ transactions: any[] }>(
+    `/transactions?startDate=${fmt(start)}&endDate=${fmt(today)}`,
+    { revalidate: 1800 }
+  ).catch(() => ({ transactions: [] as any[] }));
+  return data.transactions ?? [];
+}
+
+/** Pitching stats by player — leveraged for bullpen leverage charts. */
+export async function getTeamPitchingRoster(teamId: number, season?: number): Promise<any[]> {
+  const s = season ?? new Date().getFullYear();
+  const data = await get<any>(
+    `/teams/${teamId}/stats?stats=season&group=pitching&season=${s}&hydrate=team`,
+    { revalidate: 600 }
+  ).catch(() => null);
+  // For a roster-level breakdown, MLB exposes individual stats via roster + each player's pitching split.
+  // Cheapest path: use the team roster + each pitcher's season pitching stats, fetched separately.
+  return data?.stats?.[0]?.splits ?? [];
+}
+
 /** Remaining schedule for a team this season — Monte Carlo input. */
 export async function getRemainingSchedule(teamId: number, season?: number): Promise<ScheduleGame[]> {
   const s = season ?? new Date().getFullYear();

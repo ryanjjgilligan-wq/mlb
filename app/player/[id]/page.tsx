@@ -8,9 +8,11 @@ import {
   getPlayerSplits,
   getHittingLeaders,
   getPitchingLeaders,
+  getLeagueContext,
   playerHeadshotUrl,
   teamCapLogoUrl,
 } from '@/lib/mlb';
+import { wRCPlus, opsPlus, eraMinus } from '@/lib/leagueAdj';
 import { Panel } from '@/components/ui/Panel';
 import { Stat } from '@/components/ui/Stat';
 import { Badge } from '@/components/ui/Badge';
@@ -58,12 +60,13 @@ export default async function PlayerPage({ params }: { params: { id: string } })
   const isPitcher = player.primaryPosition.code === '1';
   const group = isPitcher ? 'pitching' : 'hitting';
 
-  const [seasonSplit, careerSplits, gameLog, splits, leaderboard] = await Promise.all([
+  const [seasonSplit, careerSplits, gameLog, splits, leaderboard, lgCtx] = await Promise.all([
     getPlayerSeasonStats(id, group as any).catch(() => null),
     getPlayerCareerStats(id, group as any).catch(() => []),
     getPlayerGameLog(id, group as any).catch(() => []),
     getPlayerSplits(id, group as any).catch(() => []),
     isPitcher ? getPitchingLeaders().catch(() => []) : getHittingLeaders().catch(() => []),
+    getLeagueContext().catch(() => null),
   ]);
 
   // Comparables from the corpus
@@ -130,9 +133,9 @@ export default async function PlayerPage({ params }: { params: { id: string } })
           />
         </Panel>
       ) : isPitcher ? (
-        <PitcherView season={s} careerSplits={careerSplits} gameLog={gameLog} splits={splits} comparables={comparables} />
+        <PitcherView season={s} careerSplits={careerSplits} gameLog={gameLog} splits={splits} comparables={comparables} lgCtx={lgCtx} />
       ) : (
-        <HitterView season={s} careerSplits={careerSplits} gameLog={gameLog} splits={splits} comparables={comparables} />
+        <HitterView season={s} careerSplits={careerSplits} gameLog={gameLog} splits={splits} comparables={comparables} lgCtx={lgCtx} />
       )}
 
       {careerSplits.length > 1 && (
@@ -218,12 +221,14 @@ function HitterView({
   gameLog,
   splits,
   comparables,
+  lgCtx,
 }: {
   season: Record<string, any>;
   careerSplits: any[];
   gameLog: any[];
   splits: any[];
   comparables: ReturnType<typeof findComparables>;
+  lgCtx: Awaited<ReturnType<typeof getLeagueContext>> | null;
 }) {
   const computedWoba = woba(season);
   const computedBabip = babip(season);
@@ -243,6 +248,43 @@ function HitterView({
           <Stat label="HR" value={season.homeRuns ?? '—'} size="xl" />
           <Stat label="RBI" value={season.rbi ?? '—'} size="xl" />
         </div>
+        {lgCtx && (
+          <div className="mt-4 pt-3 border-t border-line-subtle grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-3">
+            <Stat
+              label="wRC+"
+              value={Math.round(wRCPlus(season, lgCtx))}
+              size="lg"
+              hint={`Weighted Runs Created Plus, league-context normalized. 100 = MLB average ${lgCtx.season} (lgWOBA ${lgCtx.lgWOBA.toFixed(3)}).`}
+              trend={
+                wRCPlus(season, lgCtx) > 110
+                  ? 'pos'
+                  : wRCPlus(season, lgCtx) < 90
+                  ? 'neg'
+                  : 'neutral'
+              }
+            />
+            <Stat
+              label="OPS+"
+              value={Math.round(opsPlus(season, lgCtx))}
+              size="lg"
+              hint={`100·(OBP/lgOBP + SLG/lgSLG − 1). 100 = MLB average. lgOPS ${lgCtx.lgOPS.toFixed(3)}.`}
+              trend={
+                opsPlus(season, lgCtx) > 110
+                  ? 'pos'
+                  : opsPlus(season, lgCtx) < 90
+                  ? 'neg'
+                  : 'neutral'
+              }
+            />
+            <Stat label="Lg context" value={lgCtx.season} size="lg" hint="Season used as the league baseline" />
+            <Stat
+              label="Lg wOBA"
+              value={lgCtx.lgWOBA.toFixed(3).replace(/^0\./, '.')}
+              size="lg"
+              hint="Aggregate league wOBA used to normalize wRC+"
+            />
+          </div>
+        )}
       </Panel>
 
       <Panel
@@ -311,12 +353,14 @@ function PitcherView({
   gameLog,
   splits,
   comparables,
+  lgCtx,
 }: {
   season: Record<string, any>;
   careerSplits: any[];
   gameLog: any[];
   splits: any[];
   comparables: ReturnType<typeof findComparables>;
+  lgCtx: Awaited<ReturnType<typeof getLeagueContext>> | null;
 }) {
   const computedFip = fip(season);
   const computedWhip = whip(season);
@@ -335,6 +379,26 @@ function PitcherView({
           <Stat label="SO" value={season.strikeOuts ?? '—'} size="xl" />
           <Stat label="BB" value={season.baseOnBalls ?? '—'} size="xl" />
         </div>
+        {lgCtx && (
+          <div className="mt-4 pt-3 border-t border-line-subtle grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-3">
+            <Stat
+              label="ERA−"
+              value={Math.round(eraMinus(parseFloat(season.era ?? '99'), lgCtx))}
+              size="lg"
+              hint={`Park- and league-normalized ERA (lower = better). 100 = MLB average ${lgCtx.season} (lgERA ${lgCtx.lgERA.toFixed(2)}).`}
+              trend={
+                eraMinus(parseFloat(season.era ?? '99'), lgCtx) < 90
+                  ? 'pos'
+                  : eraMinus(parseFloat(season.era ?? '99'), lgCtx) > 110
+                  ? 'neg'
+                  : 'neutral'
+              }
+            />
+            <Stat label="Lg ERA" value={lgCtx.lgERA.toFixed(2)} size="lg" hint="Aggregate league ERA used as baseline" />
+            <Stat label="Lg context" value={lgCtx.season} size="lg" />
+            <Stat label="Lg IP" value={Math.round(lgCtx.lgIP).toLocaleString()} size="lg" hint="League aggregate IP this season" />
+          </div>
+        )}
       </Panel>
 
       <Panel

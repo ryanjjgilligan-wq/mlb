@@ -44,10 +44,18 @@ export type Opportunity = {
   headline: string;
   subline: string;
   metric: string;
+  /** Plain-English explanation of WHY this is notable and what the user should take away. */
+  explanation: string;
+  /** What the model is actually predicting in concrete terms (e.g. "expected total runs: 12.4"). */
+  prediction: string;
+  /** First-pitch ISO so the UI can render countdown + local time. */
+  firstPitch: string;
   gamePk: number;
   gameLabel: string;
   importance: number; // 0-100, used for sort + visual weighting
   confidence: 'low' | 'medium' | 'high';
+  confidenceScore: number; // 0-100 numeric
+  confidenceReasons: string[];
   probability?: number; // 0-1 if applicable, used for display + threshold
 };
 
@@ -172,12 +180,20 @@ async function buildGameInsight(
   };
 }
 
+function makeBase(g: GameInsight) {
+  return {
+    gamePk: g.gamePk,
+    gameLabel: gameLabel(g),
+    firstPitch: g.gameDate,
+    confidenceScore: g.prediction.confidence.score,
+    confidenceReasons: g.prediction.confidence.reasons,
+  };
+}
+
 function generateOpportunities(insights: GameInsight[]): Opportunity[] {
   if (!insights.length) return [];
   const opps: Opportunity[] = [];
 
-  // ── Standout-only thresholds ──
-  // Total: only flag if 1.5+ runs above/below the slate median (real edge)
   const sortedByTotal = [...insights].sort((a, b) => b.prediction.expectedTotal - a.prediction.expectedTotal);
   const median = sortedByTotal[Math.floor(sortedByTotal.length / 2)]?.prediction.expectedTotal ?? 9;
 
@@ -186,116 +202,137 @@ function generateOpportunities(insights: GameInsight[]): Opportunity[] {
     const delta = g.prediction.expectedTotal - median;
     if (delta >= 1.5) {
       opps.push({
+        ...makeBase(g),
         category: 'total-high',
-        headline: `${g.away.abbr ?? g.away.name} @ ${g.home.abbr ?? g.home.name}: ${g.prediction.expectedTotal.toFixed(1)} runs (slate +${delta.toFixed(1)})`,
-        subline: `${g.venueName ?? ''} · 80% CI ${g.prediction.ci80.low.toFixed(1)}–${g.prediction.ci80.high.toFixed(1)}`,
-        metric: `xR ${g.prediction.expectedTotal.toFixed(1)}`,
-        gamePk: g.gamePk,
-        gameLabel: gameLabel(g),
+        headline: `${g.away.abbr ?? g.away.name} at ${g.home.abbr ?? g.home.name} projects high`,
+        subline: `${g.venueName ?? ''} · 80% CI ${g.prediction.ci80.low.toFixed(1)}–${g.prediction.ci80.high.toFixed(1)} runs`,
+        explanation:
+          `The model expects ${g.prediction.expectedTotal.toFixed(1)} combined runs in this game — that's ${delta.toFixed(1)} more than the median game on today's slate (${median.toFixed(1)}). ` +
+          `Both clubs' run rates, the starting pitcher quality, the ballpark, and current weather all point toward an above-average scoring environment.`,
+        prediction: `Expected total runs: ${g.prediction.expectedTotal.toFixed(1)} (80% interval ${g.prediction.ci80.low.toFixed(1)}–${g.prediction.ci80.high.toFixed(1)})`,
+        metric: `${g.prediction.expectedTotal.toFixed(1)} R`,
         importance: Math.min(100, 60 + delta * 8),
         confidence: g.prediction.confidence.level,
       });
     } else if (delta <= -1.5) {
       opps.push({
+        ...makeBase(g),
         category: 'total-low',
-        headline: `${g.away.abbr ?? g.away.name} @ ${g.home.abbr ?? g.home.name}: ${g.prediction.expectedTotal.toFixed(1)} runs (slate ${delta.toFixed(1)})`,
+        headline: `${g.away.abbr ?? g.away.name} at ${g.home.abbr ?? g.home.name} projects low`,
         subline: `Pitchers' duel watch · ${g.venueName ?? ''}`,
-        metric: `xR ${g.prediction.expectedTotal.toFixed(1)}`,
-        gamePk: g.gamePk,
-        gameLabel: gameLabel(g),
+        explanation:
+          `The model expects only ${g.prediction.expectedTotal.toFixed(1)} combined runs — ${Math.abs(delta).toFixed(1)} below today's slate median (${median.toFixed(1)}). ` +
+          `Some combination of strong starting pitching, a pitcher-friendly venue, suppressive weather, or anemic offenses is dragging the projection down.`,
+        prediction: `Expected total runs: ${g.prediction.expectedTotal.toFixed(1)} (80% interval ${g.prediction.ci80.low.toFixed(1)}–${g.prediction.ci80.high.toFixed(1)})`,
+        metric: `${g.prediction.expectedTotal.toFixed(1)} R`,
         importance: Math.min(100, 60 + Math.abs(delta) * 8),
         confidence: g.prediction.confidence.level,
       });
     }
   }
 
-  // Weather: ≥5% impact
   for (const g of insights) {
     const wx = g.prediction.modifiers.find((m) => m.name === 'Weather');
     if (!wx) continue;
     const pct = (wx.multiplier - 1) * 100;
     if (Math.abs(pct) < 5) continue;
+    const direction = pct > 0 ? 'lifting' : 'suppressing';
     opps.push({
+      ...makeBase(g),
       category: 'weather',
-      headline: `${g.away.abbr ?? g.away.name} @ ${g.home.abbr ?? g.home.name}: weather ${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%`,
+      headline: `Weather is ${direction} offense at ${g.venueName ?? g.home.abbr ?? g.home.name}`,
       subline: wx.note,
+      explanation:
+        `Current conditions move the run-total projection by ${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%. ` +
+        `Components: ${wx.note}. Wind direction (especially out vs. in to center field) and air temperature have the largest single-pitch effect on ball flight, so this is a meaningful tailwind${pct < 0 ? '/headwind' : ''} for the offense in this game.`,
+      prediction: `Weather modifier: ${pct >= 0 ? '+' : ''}${pct.toFixed(1)}% on expected runs`,
       metric: `${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%`,
-      gamePk: g.gamePk,
-      gameLabel: gameLabel(g),
       importance: Math.min(100, 50 + Math.abs(pct) * 4),
       confidence: g.prediction.confidence.level,
     });
   }
 
-  // K matchup: only K/9 ≥ 11
   for (const g of insights) {
     const aceK9 = Math.max(g.awayStarter?.k9 ?? 0, g.homeStarter?.k9 ?? 0);
     if (aceK9 < 11) continue;
     const ace = (g.awayStarter?.k9 ?? 0) > (g.homeStarter?.k9 ?? 0) ? g.awayStarter! : g.homeStarter!;
     opps.push({
+      ...makeBase(g),
       category: 'k-matchup',
-      headline: `${ace.name}: ${ace.k9!.toFixed(1)} K/9 — elite K projection`,
-      subline: `${g.away.abbr ?? g.away.name} @ ${g.home.abbr ?? g.home.name} · ${g.venueName ?? ''}`,
+      headline: `${ace.name} on the bump — elite strikeout rate`,
+      subline: `${g.away.abbr ?? g.away.name} at ${g.home.abbr ?? g.home.name} · ${g.venueName ?? ''}`,
+      explanation:
+        `${ace.name} is averaging ${ace.k9!.toFixed(1)} strikeouts per 9 innings this season — well above the league average of about 8.5. ` +
+        `Combined with this venue's strikeout factor, the per-pitcher K projection is elevated. Useful for over/under K props on the starter.`,
+      prediction: `${ace.name}: ${ace.k9!.toFixed(1)} K/9 season rate`,
       metric: `${ace.k9!.toFixed(1)} K/9`,
-      gamePk: g.gamePk,
-      gameLabel: gameLabel(g),
       importance: Math.min(100, 50 + (aceK9 - 10) * 6),
       confidence: g.prediction.confidence.level,
     });
   }
 
-  // Park amplifications: only extreme (>= 110 or <= 92)
   for (const g of insights) {
     const park = getPark(g.venueId);
     if (park.runs >= 110) {
       opps.push({
+        ...makeBase(g),
         category: 'park',
-        headline: `${park.name} (factor ${park.runs}) lifts run scoring`,
-        subline: `${g.away.abbr ?? g.away.name} @ ${g.home.abbr ?? g.home.name}`,
+        headline: `${park.name} is among the league's best hitter parks`,
+        subline: `${g.away.abbr ?? g.away.name} at ${g.home.abbr ?? g.home.name}`,
+        explanation:
+          `${park.name} carries a runs factor of ${park.runs} (100 = league average), a 3-year average. ` +
+          `Expect inflated scoring and a bump on home-run probability for batters in this game versus a neutral venue.`,
+        prediction: `Park factor: ${park.runs} (runs); HR factor: ${park.hr}`,
         metric: `Park ${park.runs}`,
-        gamePk: g.gamePk,
-        gameLabel: gameLabel(g),
         importance: 60 + (park.runs - 110) * 2,
         confidence: 'high',
       });
     } else if (park.runs <= 92) {
       opps.push({
+        ...makeBase(g),
         category: 'park',
-        headline: `${park.name} (factor ${park.runs}) suppresses run scoring`,
-        subline: `${g.away.abbr ?? g.away.name} @ ${g.home.abbr ?? g.home.name}`,
+        headline: `${park.name} is among the league's most pitcher-friendly venues`,
+        subline: `${g.away.abbr ?? g.away.name} at ${g.home.abbr ?? g.home.name}`,
+        explanation:
+          `${park.name} carries a runs factor of ${park.runs} — well below the league-average 100. ` +
+          `Expect suppressed scoring; HR projections should be discounted versus a neutral park.`,
+        prediction: `Park factor: ${park.runs} (runs); HR factor: ${park.hr}`,
         metric: `Park ${park.runs}`,
-        gamePk: g.gamePk,
-        gameLabel: gameLabel(g),
         importance: 55 + (92 - park.runs) * 2,
         confidence: 'high',
       });
     }
   }
 
-  // Talent mismatch: pHomeWin > 70% or < 30% AND prediction confidence not low
   for (const g of insights) {
     if (g.prediction.confidence.level === 'low') continue;
     const pHome = g.prediction.pHomeWin;
     if (pHome > 0.70) {
       opps.push({
+        ...makeBase(g),
         category: 'mismatch',
-        headline: `${g.home.abbr ?? g.home.name} a ${(pHome * 100).toFixed(0)}% favorite at home`,
-        subline: `vs ${g.away.abbr ?? g.away.name} · model sees a sizable gap`,
-        metric: `${(pHome * 100).toFixed(0)}%`,
-        gamePk: g.gamePk,
-        gameLabel: gameLabel(g),
+        headline: `${g.home.abbr ?? g.home.name} a heavy favorite at home`,
+        subline: `vs ${g.away.abbr ?? g.away.name}`,
+        explanation:
+          `The model gives the home club a ${(pHome * 100).toFixed(0)}% chance to win — well outside the typical 50/50 range. ` +
+          `That's driven by a meaningful gap in season run rates and the starters' projected effectiveness, plus the standard 54% home-field bump.`,
+        prediction: `Home win probability: ${(pHome * 100).toFixed(1)}%`,
+        metric: `${(pHome * 100).toFixed(0)}% home`,
         importance: Math.round(50 + (pHome - 0.5) * 100),
         confidence: g.prediction.confidence.level,
         probability: pHome,
       });
     } else if (pHome < 0.30) {
       opps.push({
+        ...makeBase(g),
         category: 'mismatch',
-        headline: `${g.away.abbr ?? g.away.name} a ${((1 - pHome) * 100).toFixed(0)}% road favorite`,
-        subline: `at ${g.home.abbr ?? g.home.name} · sizable talent gap`,
-        metric: `${((1 - pHome) * 100).toFixed(0)}%`,
-        gamePk: g.gamePk,
-        gameLabel: gameLabel(g),
+        headline: `${g.away.abbr ?? g.away.name} a heavy road favorite`,
+        subline: `at ${g.home.abbr ?? g.home.name}`,
+        explanation:
+          `The model gives the visiting club a ${((1 - pHome) * 100).toFixed(0)}% chance to win — overcoming the standard home-field disadvantage and then some. ` +
+          `Strong road favorites are uncommon and usually point to a notable talent or starting-pitching gap.`,
+        prediction: `Away win probability: ${((1 - pHome) * 100).toFixed(1)}%`,
+        metric: `${((1 - pHome) * 100).toFixed(0)}% road`,
         importance: Math.round(50 + (0.5 - pHome) * 100),
         confidence: g.prediction.confidence.level,
         probability: 1 - pHome,
@@ -303,43 +340,46 @@ function generateOpportunities(insights: GameInsight[]): Opportunity[] {
     }
   }
 
-  // Travel: ≥ 2000 miles only (cross-country)
   insights
     .filter((g) => g.awayTravelMiles >= 2000)
     .sort((a, b) => b.awayTravelMiles - a.awayTravelMiles)
     .forEach((g) => {
       opps.push({
+        ...makeBase(g),
         category: 'travel',
-        headline: `${g.away.abbr ?? g.away.name} on a ${Math.round(g.awayTravelMiles)} mi road trip`,
-        subline: `Visiting ${g.home.abbr ?? g.home.name} after a long haul`,
+        headline: `${g.away.abbr ?? g.away.name} on a long road trip`,
+        subline: `Visiting ${g.home.abbr ?? g.home.name}`,
+        explanation:
+          `The visiting club traveled approximately ${Math.round(g.awayTravelMiles)} miles since their last game. ` +
+          `Long cross-country travel and short rest tend to shave a small amount off offensive production — directionally suggestive but not large in magnitude.`,
+        prediction: `Visitor travel: ~${Math.round(g.awayTravelMiles)} miles`,
         metric: `${Math.round(g.awayTravelMiles)} mi`,
-        gamePk: g.gamePk,
-        gameLabel: gameLabel(g),
         importance: Math.round(45 + (g.awayTravelMiles - 2000) / 50),
         confidence: 'medium',
       });
     });
 
-  // Shootout: park × weather stacking ≥ +12%
   for (const g of insights) {
     const park = getPark(g.venueId);
     const wx = g.prediction.modifiers.find((m) => m.name === 'Weather')?.multiplier ?? 1;
     const stack = (park.runs / 100) * wx;
     if (stack >= 1.12) {
       opps.push({
+        ...makeBase(g),
         category: 'shootout',
-        headline: `${g.away.abbr ?? g.away.name} @ ${g.home.abbr ?? g.home.name}: park × weather +${((stack - 1) * 100).toFixed(0)}%`,
-        subline: `${park.name} · ${g.weather?.tempF ? `${g.weather.tempF}°F` : ''} ${g.weather?.windDir ?? ''}`,
+        headline: `Shootout setup at ${park.name}`,
+        subline: `${g.away.abbr ?? g.away.name} at ${g.home.abbr ?? g.home.name}`,
+        explanation:
+          `Park factor and weather are stacking the deck for offense by about +${((stack - 1) * 100).toFixed(0)}% combined. ` +
+          `${park.name} is naturally hitter-friendly, and current conditions are working in the same direction. When both lift simultaneously the run environment can spike well above the model's mean projection.`,
+        prediction: `Park × weather stacking: +${((stack - 1) * 100).toFixed(0)}%`,
         metric: `+${((stack - 1) * 100).toFixed(0)}%`,
-        gamePk: g.gamePk,
-        gameLabel: gameLabel(g),
         importance: Math.round(70 + (stack - 1) * 150),
         confidence: g.prediction.confidence.level,
       });
     }
   }
 
-  // Filter to medium+ confidence only and sort
   return opps
     .filter((o) => o.confidence !== 'low')
     .sort((a, b) => b.importance - a.importance)

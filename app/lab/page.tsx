@@ -147,6 +147,38 @@ export default function LabPage() {
           ]}
         />
         <Section
+          name="League-context metrics — wRC+, OPS+, ERA−"
+          status="solid"
+          formula={
+            "wRC+  = 100 · ((wOBA − lgWOBA) / wOBAScale + lgR/PA) / (lgR/PA)\n" +
+            "OPS+  = 100 · (OBP/lgOBP + SLG/lgSLG − 1)\n" +
+            "ERA−  = 100 · (ERA / lgERA)\n" +
+            "All ×(100/parkFactor) when a known park is supplied."
+          }
+          source="Tom Tango wOBA framework; Fangraphs glossary entries."
+          notes={[
+            'League aggregates pulled from /teams/stats?sportId=1&group=hitting,pitching at request time, cached 1h.',
+            'wOBAScale held at 1.157 (recent multi-year average); Fangraphs publishes a per-season scale.',
+            'Park adjustment optional — passed in only when a player\'s home park is known to the caller.',
+            '7 unit tests verify league-average ≈ 100, elite > 140, weak < 80, ERA− Cy Young ~58.',
+          ]}
+        />
+        <Section
+          name="Lineup expected R/G — Markov chain"
+          status="baseline"
+          formula={
+            "24 base-out states. Per-PA event probs from each batter's season counting stats: BB, K, HR, 3B, 2B, 1B, in-play out.\n" +
+            "Standard base-running rules (force-only on walks; runners advance one extra base on doubles, home on triples). Inning ends at 3 outs.\n" +
+            "Game = sum runs across 9 simulated innings, lineup rotates between innings. Repeat N times for the mean."
+          }
+          source="Standard sabermetric Markov framework; James, Tango, Lichtman."
+          notes={[
+            'Pure JS, runs server-side per request (5,000 iterations default, sub-second).',
+            'Optimizer uses a heuristic random search (high-OBP-first seed + 80 swap candidates) since 9! permutations is too expensive.',
+            '6 unit tests verify avg lineup = 3.5–6.0 R/G, elite outscores weak, valid ordering, Trout 2012 produces sensible rates.',
+          ]}
+        />
+        <Section
           name="Starter K prop"
           status="baseline"
           formula={
@@ -266,6 +298,9 @@ export default function LabPage() {
           <li>Multi-season percentile profile with side-by-side compare</li>
           <li>Local-timezone formatting + System/Light/Dark theme toggle</li>
           <li>Auto-refresh on scoreboard + live games (15s/30s/2m tiered)</li>
+          <li>League-context-adjusted metrics: wRC+, OPS+, ERA− with per-season league baselines</li>
+          <li>Recent-transactions wire on the home page (last 5 days, MLB /transactions)</li>
+          <li>Markov-chain lineup expected-runs simulator (lib/markov.ts) + heuristic optimizer</li>
         </ul>
       </Panel>
 
@@ -289,12 +324,8 @@ export default function LabPage() {
             <span className="text-ink">Hot/cold zones.</span> Pending Statcast play-by-play.
           </li>
           <li>
-            <span className="text-ink">League-context-adjusted stats (wRC+, OPS+, ERA−).</span> Need a
-            per-season league totals table.
-          </li>
-          <li>
-            <span className="text-ink">Lineup optimizer (Markov chain).</span> Tractable in JS; needs
-            transition-probability calibration from PBP data.
+            <span className="text-ink">Bullpen leverage chart (LI vs FIP/SIERA).</span> Was in the
+            original spec; needs the per-pitcher fetch loop. Pending on team page.
           </li>
           <li>
             <span className="text-ink">Cross-device watchlist sync, alerts.</span> Need auth +

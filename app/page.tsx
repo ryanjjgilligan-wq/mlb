@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { getSchedule, getStandings, getTeams } from '@/lib/mlb';
+import { getSchedule, getStandings, getTeams, getTransactions } from '@/lib/mlb';
 import { GameRow } from '@/components/GameRow';
 import { Panel } from '@/components/ui/Panel';
 import { Badge } from '@/components/ui/Badge';
@@ -21,9 +21,10 @@ export default async function HomePage({
   const today = searchParams?.date && /^\d{4}-\d{2}-\d{2}$/.test(searchParams.date)
     ? searchParams.date
     : ymd();
-  const [scheduleToday, standings] = await Promise.all([
+  const [scheduleToday, standings, transactions] = await Promise.all([
     getSchedule(today).catch(() => []),
     getStandings().catch(() => []),
+    getTransactions(5).catch(() => []),
   ]);
 
   const games = scheduleToday[0]?.games ?? [];
@@ -144,6 +145,39 @@ export default async function HomePage({
         </div>
       </div>
 
+      {/* Wire — recent transactions */}
+      <Panel
+        title="Wire"
+        subtitle={`Roster moves from the last 5 days · ${transactions.length} transactions`}
+        actions={
+          <span className="text-2xs text-ink-faint">MLB Stats API · /transactions</span>
+        }
+        flush
+      >
+        {transactions.length === 0 ? (
+          <Empty title="No recent transactions." />
+        ) : (
+          <ul className="divide-y divide-line-subtle max-h-80 overflow-y-auto">
+            {transactions.slice(0, 50).map((tx: any) => (
+              <li key={tx.id ?? `${tx.date}-${tx.person?.id}-${tx.typeCode}`}>
+                <div className="flex items-center gap-3 px-3 py-1.5 row-hover">
+                  <span className="text-2xs text-ink-faint stat-num w-12">{(tx.date ?? '').slice(5, 10)}</span>
+                  <Badge variant={txVariant(tx.typeCode)}>{tx.typeCode ?? '—'}</Badge>
+                  <span className="text-sm flex-1 truncate">
+                    {tx.description ?? `${tx.person?.fullName ?? '—'} · ${tx.toTeam?.name ?? ''}`}
+                  </span>
+                  {tx.toTeam?.id && (
+                    <Link href={`/team/${tx.toTeam.id}`} className="text-2xs text-ink-faint hover:text-ink truncate max-w-[120px]">
+                      {tx.toTeam.abbreviation ?? tx.toTeam.name}
+                    </Link>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Panel>
+
       {/* Standings strip */}
       <Panel
         title="Standings snapshot"
@@ -188,6 +222,15 @@ export default async function HomePage({
       </Panel>
     </div>
   );
+}
+
+function txVariant(code: string | undefined): 'pos' | 'neg' | 'warn' | 'info' | 'neutral' {
+  if (!code) return 'neutral';
+  if (/^SU|RC|CU$/.test(code)) return 'pos';     // Selected, recalled, contract purchased
+  if (/^DFA|REL|RT$/.test(code)) return 'neg';   // Designated, released, returned
+  if (/^DES|OUT|TR$/.test(code)) return 'warn';  // Designated, optioned, traded
+  if (/^SC|CL$/.test(code)) return 'info';       // Status changed, claimed
+  return 'neutral';
 }
 
 function Section({ label, count, children }: { label: string; count: number; children: React.ReactNode }) {
