@@ -1,0 +1,56 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html, body {
+    background: #0a0a0b;
+    color: #e8e8ec;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Tabular figures everywhere — numbers are the protagonist */
+  .num, table, tbody, thead, th, td, .mono {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum' 1, 'ss01' 1;
+  }
+
+  ::selection {
+    background: #facc1533;
+    color: #fff;
+  }
+
+  /* Scrollbars — minimal */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #1f1f24; border-radius: 6px; }
+  ::-webkit-scrollbar-thumb:hover { background: #2a2a31; }
+}
+
+@layer components {
+  .panel {
+    @apply bg-bg-panel border border-line rounded-md;
+  }
+  .panel-flush {
+    @apply bg-bg-raised border border-line;
+  }
+  .label-micro {
+    @apply text-2xs uppercase tracking-micro text-ink-muted font-medium;
+  }
+  .stat-num {
+    @apply font-mono tabular-nums tracking-tight;
+  }
+  .row-hover {
+    @apply hover:bg-bg-hover transition-colors;
+  }
+  .divider-x {
+    @apply border-t border-line;
+  }
+  .kbd {
+    @apply font-mono text-2xs px-1.5 py-0.5 rounded border border-line bg-bg-raised text-ink-muted;
+  }
+}
