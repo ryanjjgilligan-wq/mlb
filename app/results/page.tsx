@@ -6,9 +6,11 @@ import {
   fairAmericanOdds,
   formatAmericanOdds,
   fairUnitPayout,
+  payoutAtOdds,
   type ConvictionPick,
   type PickCategory,
 } from '@/lib/highConvictionPicks';
+import { getMarketOdds, isOddsConfigured } from '@/lib/odds';
 import { Panel } from '@/components/ui/Panel';
 import { Empty } from '@/components/ui/Empty';
 import { AutoRefresh } from '@/components/AutoRefresh';
@@ -28,6 +30,8 @@ import {
   Hourglass,
   Shield,
   BarChart3,
+  Scale,
+  AlertTriangle,
 } from 'lucide-react';
 
 export const revalidate = 60;
@@ -37,26 +41,47 @@ export const metadata = {
 };
 
 const CATEGORY_META: Record<PickCategory, { label: string; sublabel: string; icon: any; color: string }> = {
-  winner:       { label: 'Winners',       sublabel: 'Moneyline picks · > 60% home or away',   icon: Crown,     color: 'text-accent' },
-  'pitcher-k':  { label: 'Pitcher Ks',    sublabel: 'Strikeout over-line props · > 60%',      icon: Zap,        color: 'text-signal-info' },
-  f5:           { label: 'First 5',       sublabel: 'F5 over/under · > 60%',                  icon: Hourglass,  color: 'text-signal-info' },
-  'nrfi-yrfi':  { label: 'NRFI / YRFI',   sublabel: '1st-inning runs · > 60%',                icon: Shield,     color: 'text-signal-pos' },
-  'total-runs': { label: 'Total runs',    sublabel: 'Full-game over/under · > 60%',           icon: BarChart3,  color: 'text-signal-info' },
+  winner:       { label: 'Winners',       sublabel: 'Moneyline picks',                        icon: Crown,     color: 'text-accent' },
+  'pitcher-k':  { label: 'Pitcher Ks',    sublabel: 'Strikeout over-line props',              icon: Zap,        color: 'text-signal-info' },
+  f5:           { label: 'First 5',       sublabel: 'F5 over/under',                          icon: Hourglass,  color: 'text-signal-info' },
+  'nrfi-yrfi':  { label: 'NRFI / YRFI',   sublabel: '1st-inning runs',                        icon: Shield,     color: 'text-signal-pos' },
+  'total-runs': { label: 'Total runs',    sublabel: 'Full-game over/under',                   icon: BarChart3,  color: 'text-signal-info' },
+  'run-line':   { label: 'Run line',      sublabel: '±1.5 spread covers',                     icon: Scale,      color: 'text-accent' },
 };
 
-const CATEGORIES: PickCategory[] = ['winner', 'pitcher-k', 'f5', 'nrfi-yrfi', 'total-runs'];
+const CATEGORIES: PickCategory[] = ['winner', 'pitcher-k', 'f5', 'nrfi-yrfi', 'total-runs', 'run-line'];
 
 export default async function ResultsPage({ searchParams }: { searchParams: { date?: string } }) {
   const today = searchParams?.date && /^\d{4}-\d{2}-\d{2}$/.test(searchParams.date)
     ? searchParams.date
     : ymd();
 
+  // Pull live market odds for today (only) — historical picks for prior
+  // days use the prob-mode threshold since we don't store odds snapshots yet.
+  const oddsConfigured = isOddsConfigured();
+  const marketOdds = oddsConfigured ? await getMarketOdds().catch(() => null) : null;
+
   // Last 7 days (selected date + 6 prior) in parallel
   const dates = Array.from({ length: 7 }, (_, i) => shiftYmd(today, -i)).reverse();
   const allSlates = await Promise.all(
     dates.map((d) =>
       buildSlateInsights(d)
-        .then((s) => ({ date: d, picks: buildAllPicks(s.games, 0.60), games: s.games.length }))
+        .then((s) => {
+          // Only feed market odds to today's slate — past days didn't have
+          // these odds snapshotted, so we can't reliably tie them to picks
+          // that would have existed at first pitch.
+          const odds = d === today ? marketOdds : null;
+          return {
+            date: d,
+            picks: buildAllPicks(s.games, {
+              threshold: 0.60,
+              edgeThresholdPP: 3.0,
+              marketOdds: odds,
+              mode: odds ? 'edge' : 'prob',
+            }),
+            games: s.games.length,
+          };
+        })
         .catch(() => ({ date: d, picks: [] as ConvictionPick[], games: 0 }))
     )
   );
@@ -85,6 +110,7 @@ export default async function ResultsPage({ searchParams }: { searchParams: { da
     f5: [],
     'nrfi-yrfi': [],
     'total-runs': [],
+    'run-line': [],
   };
   for (const p of todaySlate.picks) byCategory[p.category].push(p);
   // Sort each category by probability descending, status priority for ordering
@@ -121,10 +147,49 @@ export default async function ResultsPage({ searchParams }: { searchParams: { da
         <DateNav today={today} />
       </div>
 
+      {/* Live odds banner */}
+      {!oddsConfigured && (
+        <Panel
+          title={<span className="flex items-center gap-2"><AlertTriangle size={14} className="text-signal-warn" /> Running in model-only mode</span>}
+        >
+          <div className="text-sm text-ink-muted space-y-2">
+            <p>
+              No live sportsbook odds are wired in yet. Picks are filtered by{' '}
+              <span className="text-ink">model probability ≥ 60%</span>, and units are calculated at
+              fair zero-vig odds derived from the model itself. <span className="text-signal-warn">This
+              can't actually find market edge.</span>
+            </p>
+            <p>
+              <span className="text-ink">To enable edge mode:</span> create a free API key at{' '}
+              <a className="underline" href="https://the-odds-api.com" target="_blank" rel="noreferrer">the-odds-api.com</a>{' '}
+              (500 requests/month free — more than enough for daily MLB), then set the{' '}
+              <code className="text-2xs bg-bg-sunken px-1 rounded">ODDS_API_KEY</code> env var in your Vercel project
+              and redeploy. Picks will then surface only when model probability beats market-implied
+              probability by ≥ 3 percentage points, and units are calculated at the actual market price you'd
+              get from a sportsbook.
+            </p>
+          </div>
+        </Panel>
+      )}
+
+      {oddsConfigured && marketOdds && marketOdds.size > 0 && (
+        <Panel
+          title={<span className="flex items-center gap-2"><Scale size={14} className="text-signal-pos" /> Edge mode active</span>}
+        >
+          <p className="text-sm text-ink-muted">
+            Live sportsbook odds wired in for <span className="text-ink stat-num">{marketOdds.size}</span> games.
+            Picks filter at <span className="text-ink">≥ 3pp edge</span> (model prob − market implied) and units
+            use the actual market payout for each line. Real-world P&amp;L tracks these numbers.
+          </p>
+        </Panel>
+      )}
+
       {/* TODAY'S SCORECARD */}
       <Panel
         title="Today's scorecard"
-        subtitle={`All > 60% model picks · 5 buckets · ${todayAgg.total} total picks across ${todaySlate.games} games`}
+        subtitle={oddsConfigured && marketOdds
+          ? `Edge mode: > 3pp edge vs market · ${todayAgg.total} picks across ${todaySlate.games} games`
+          : `Model-only mode: > 60% model probability · ${todayAgg.total} picks across ${todaySlate.games} games`}
         flush
       >
         <div className="grid grid-cols-2 md:grid-cols-6 gap-px bg-line">
@@ -263,30 +328,35 @@ export default async function ResultsPage({ searchParams }: { searchParams: { da
       <Panel title="Methodology">
         <ul className="text-sm text-ink-muted space-y-2 list-disc pl-5">
           <li>
-            <span className="text-ink">Five categories tracked</span>: Winner ML, pitcher strikeouts (over-line),
-            F5 over/under, NRFI/YRFI, full-game total over/under. Every pick is logged the moment the slate is
-            generated, before first pitch.
+            <span className="text-ink">Six categories tracked</span>: Winner ML, run-line (±1.5), pitcher
+            strikeouts (over-line), F5 over/under, NRFI/YRFI, full-game total over/under. Every pick is logged
+            the moment the slate is generated, before first pitch.
           </li>
           <li>
-            <span className="text-ink">Only &gt; 60% picks make this page.</span> If the model isn't at least 60%
-            on a side, no pick is recorded — keeps the bar high and the receipts tight.
+            <span className="text-ink">Two filtering modes</span>:{' '}
+            <span className="text-ink">edge mode</span> (when <code className="stat-num">ODDS_API_KEY</code>{' '}
+            is set) accepts a side only when the model probability beats the market's implied probability by{' '}
+            <span className="stat-num">≥ 3 percentage points</span> AND model prob ≥ 50% — this is how sharp
+            bettors actually operate, since a 65% pick at −300 is a losing bet but a 52% pick at +120 is +EV.
+            <span className="text-ink"> Prob mode</span> (model-only fallback) accepts any side at{' '}
+            <span className="stat-num">≥ 60%</span> raw model probability.
           </li>
           <li>
             <span className="text-ink">Win % = hits / (hits + misses).</span> Pushes, pending, and live picks
             are tracked separately.
           </li>
           <li>
-            <span className="text-ink">Units are calculated at fair (zero-vig) American odds derived from
-            each pick's model probability</span> — not a flat −110. A 70% pick wins (1−0.70)/0.70 = 0.43u;
-            a 60% pick wins 0.67u; both lose 1.00u. This is what you'd earn if you got the model's own price
-            on every pick. Real sportsbook lines are ~5% worse than fair due to vig, so live P&amp;L will
-            track slightly below the numbers shown here. Each pick row displays its fair American odds
-            inline (e.g. <span className="stat-num">fair −233</span> for a 70% pick).
+            <span className="text-ink">Units</span>: when live market odds are attached we calculate P&amp;L at
+            the real American line (the price you'd actually get at a US book — median across surveyed books).
+            When odds aren't available we fall back to fair (zero-vig) odds derived from the model's
+            probability: a 70% pick wins 0.43u, a 60% pick wins 0.67u, both lose 1.00u. The fair-units
+            number always tracks what you'd earn at the model's own price.
           </li>
           <li>
             <span className="text-ink">K props use Poisson(λ)</span> where λ = projected starter Ks (K/9 ×
-            IP/start × opp adj × park SO factor). Run totals use normal-approx with overdispersion ψ=1.5.
-            F5 + NRFI come from the F5 model. Full math at <Link href="/lab" className="underline">/lab</Link>.
+            IP/start × opp adj × park SO factor). Run totals + run-line use normal-approx with overdispersion
+            ψ=1.5 on (home − away) run differential. F5 + NRFI come from the F5 model. Full math at{' '}
+            <Link href="/lab" className="underline">/lab</Link>.
           </li>
         </ul>
       </Panel>
@@ -360,26 +430,42 @@ function PickRow({ pick }: { pick: ConvictionPick }) {
             )}
           </div>
 
-          {/* Probability + fair odds column */}
-          <div className="text-right shrink-0 flex flex-col items-end gap-0.5 min-w-[80px]">
+          {/* Probability + market + edge column */}
+          <div className="text-right shrink-0 flex flex-col items-end gap-0.5 min-w-[120px]">
             <div className="flex items-baseline gap-1">
               <span className={`stat-num text-2xl font-black ${
                 pick.probability >= 0.75 ? 'text-signal-pos' :
                 pick.probability >= 0.65 ? 'text-ink' :
                 'text-ink-muted'
               }`}>{(pick.probability * 100).toFixed(0)}</span>
-              <span className="text-2xs text-ink-faint">%</span>
+              <span className="text-2xs text-ink-faint">% model</span>
             </div>
-            <div className="text-2xs text-ink-faint stat-num">
-              fair {formatAmericanOdds(fairAmericanOdds(pick.probability))}
-            </div>
+            {pick.market ? (
+              <>
+                <div className="text-2xs text-ink-faint stat-num">
+                  market {formatAmericanOdds(pick.market.americanOdds)} · {(pick.market.impliedProb * 100).toFixed(1)}%
+                </div>
+                <div className={`text-2xs stat-num font-semibold ${
+                  pick.market.edgePP >= 5 ? 'text-signal-pos' :
+                  pick.market.edgePP >= 3 ? 'text-signal-pos/80' :
+                  pick.market.edgePP >= 0 ? 'text-ink-muted' :
+                  'text-signal-neg'
+                }`}>
+                  edge {pick.market.edgePP >= 0 ? '+' : ''}{pick.market.edgePP.toFixed(1)}pp · EV {pick.market.evPerUnit >= 0 ? '+' : ''}{(pick.market.evPerUnit * 100).toFixed(1)}¢
+                </div>
+              </>
+            ) : (
+              <div className="text-2xs text-ink-faint stat-num">
+                fair {formatAmericanOdds(fairAmericanOdds(pick.probability))}
+              </div>
+            )}
             {pick.result === 'hit' && (
-              <div className="text-2xs text-signal-pos stat-num">
-                +{fairUnitPayout(pick.probability).toFixed(2)}u
+              <div className="text-2xs text-signal-pos stat-num font-semibold">
+                +{(pick.market ? payoutAtOdds(pick.market.americanOdds) : fairUnitPayout(pick.probability)).toFixed(2)}u
               </div>
             )}
             {pick.result === 'miss' && (
-              <div className="text-2xs text-signal-neg stat-num">−1.00u</div>
+              <div className="text-2xs text-signal-neg stat-num font-semibold">−1.00u</div>
             )}
             {(pick.result === 'live' || pick.result === 'pending') && (
               <span className="text-2xs text-ink-faint">

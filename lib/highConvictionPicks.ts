@@ -13,8 +13,23 @@
 import type { GameInsight, OpportunityResult } from './insights';
 import { predictFirst5, predictPitcherProp } from './predict';
 import { getPark } from './parks';
+import type { MarketOddsForGame } from './odds';
+import { matchupKey } from './odds';
 
-export type PickCategory = 'winner' | 'pitcher-k' | 'f5' | 'nrfi-yrfi' | 'total-runs';
+export type PickCategory = 'winner' | 'pitcher-k' | 'f5' | 'nrfi-yrfi' | 'total-runs' | 'run-line';
+
+/**
+ * Market-side info attached to a pick when we have real odds. Edge is the
+ * gap between modelP and the market's implied probability (in pp). EV is
+ * the expected unit return per $1 bet at the actual market price.
+ */
+export type MarketAttachment = {
+  americanOdds: number;
+  impliedProb: number; // 0–1
+  edgePP: number;      // model − implied, in percentage points
+  evPerUnit: number;   // expected $ return per $1 risked at this line
+  bookCount: number;
+};
 
 export type ConvictionPick = {
   gamePk: number;
@@ -34,6 +49,8 @@ export type ConvictionPick = {
   /** Specific player ID for player-prop picks (pitcher Ks). */
   playerId?: number;
   playerName?: string;
+  /** Real-market odds + edge info when available. */
+  market?: MarketAttachment;
 };
 
 const POISSON_MEMO = new Map<string, number>();
@@ -83,10 +100,56 @@ function ord(n: number) {
 }
 
 /**
- * Generate all > 60% confidence picks for a single game across the five
- * categories. Each pick is graded if the game has progressed enough.
+ * Build a MarketAttachment from model probability + real American odds.
+ * Returns undefined when odds aren't available — pick still renders, just
+ * without the market column.
  */
-export function picksForGame(g: GameInsight, threshold = 0.60): ConvictionPick[] {
+function attachMarket(modelP: number, americanOdds: number | null | undefined, bookCount = 0): MarketAttachment | undefined {
+  if (americanOdds == null || !Number.isFinite(americanOdds)) return undefined;
+  return {
+    americanOdds,
+    impliedProb: impliedProb(americanOdds),
+    edgePP: edgePP(modelP, americanOdds),
+    evPerUnit: evAtOdds(modelP, americanOdds),
+    bookCount,
+  };
+}
+
+/**
+ * Generate picks across the 6 categories for a single game.
+ *
+ * If `mode === 'edge'` and market odds are supplied, picks are filtered by
+ * EDGE (model prob − market implied prob), not raw probability. This is
+ * how sharp bettors actually operate — bet only when the model thinks the
+ * market is mispricing the side.
+ *
+ * If `mode === 'prob'` or odds are missing, picks filter by raw probability.
+ */
+export function picksForGame(
+  g: GameInsight,
+  opts: {
+    threshold?: number;        // 0.60 default for prob mode
+    edgeThresholdPP?: number;  // 3.0 default for edge mode (3pp)
+    marketOdds?: MarketOddsForGame;
+    mode?: 'prob' | 'edge';
+  } = {}
+): ConvictionPick[] {
+  const threshold = opts.threshold ?? 0.60;
+  const edgeThreshold = opts.edgeThresholdPP ?? 3.0;
+  const odds = opts.marketOdds;
+  const mode = opts.mode ?? (odds ? 'edge' : 'prob');
+
+  // Decision helper — passes if either:
+  //   - mode === 'prob' and modelP ≥ threshold
+  //   - mode === 'edge' and we have an odds price AND edge ≥ threshold
+  const passes = (modelP: number, americanOdds: number | null | undefined): boolean => {
+    if (modelP >= threshold && (mode === 'prob' || americanOdds == null)) return true;
+    if (mode === 'edge' && americanOdds != null) {
+      return edgePP(modelP, americanOdds) >= edgeThreshold && modelP >= 0.50;
+    }
+    return false;
+  };
+
   const out: ConvictionPick[] = [];
   const awayAbbr = g.away.abbr ?? g.away.name;
   const homeAbbr = g.home.abbr ?? g.home.name;
@@ -96,7 +159,9 @@ export function picksForGame(g: GameInsight, threshold = 0.60): ConvictionPick[]
   const pHomeWin = g.prediction.pHomeWin;
 
   // ── 1. WINNER (moneyline) ────────────────────────────────────────────────
-  if (pHomeWin >= threshold) {
+  const mlHomeOdds = odds?.ml?.home;
+  const mlAwayOdds = odds?.ml?.away;
+  if (passes(pHomeWin, mlHomeOdds)) {
     const result: OpportunityResult =
       isFinal ? (g.actual && g.actual.homeRuns > g.actual.awayRuns ? 'hit' : 'miss') :
       isLive ? 'live' : 'pending';
@@ -117,8 +182,9 @@ export function picksForGame(g: GameInsight, threshold = 0.60): ConvictionPick[]
           ? `Final ${g.actual.awayRuns}–${g.actual.homeRuns} · home ${g.actual.homeRuns > g.actual.awayRuns ? 'won ✓' : 'lost ✗'}`
           : `Live ${g.actual.awayRuns}–${g.actual.homeRuns} · ${g.actual.inningsCompleted} inn done`
         : undefined,
+      market: attachMarket(pHomeWin, mlHomeOdds, odds?.bookCount),
     });
-  } else if (1 - pHomeWin >= threshold) {
+  } else if (passes(1 - pHomeWin, mlAwayOdds)) {
     const pAway = 1 - pHomeWin;
     const result: OpportunityResult =
       isFinal ? (g.actual && g.actual.awayRuns > g.actual.homeRuns ? 'hit' : 'miss') :
@@ -140,6 +206,7 @@ export function picksForGame(g: GameInsight, threshold = 0.60): ConvictionPick[]
           ? `Final ${g.actual.awayRuns}–${g.actual.homeRuns} · away ${g.actual.awayRuns > g.actual.homeRuns ? 'won ✓' : 'lost ✗'}`
           : `Live ${g.actual.awayRuns}–${g.actual.homeRuns} · ${g.actual.inningsCompleted} inn done`
         : undefined,
+      market: attachMarket(pAway, mlAwayOdds, odds?.bookCount),
     });
   }
 
@@ -165,9 +232,10 @@ export function picksForGame(g: GameInsight, threshold = 0.60): ConvictionPick[]
     for (const line of [4.5, 5.5, 6.5, 7.5, 8.5, 9.5]) {
       const p = 1 - poissonCdf(Math.floor(line), lambda);
       if (p >= threshold && p > bestProb) {
-        bestProb = p;
-        bestLine = line;
+        bestProb = p; bestLine = line;
       }
+      // edge mode: take the highest-prob line that clears edge threshold
+      // (we don't have per-line K odds from the API yet, so prob-mode applies)
     }
     if (bestLine > 0) {
       const actualKs = isFinal && g.actual
@@ -324,26 +392,119 @@ export function picksForGame(g: GameInsight, threshold = 0.60): ConvictionPick[]
   }
 
   // ── 5. TOTAL RUNS (full-game over/under) ────────────────────────────────
+  // When market line exists, evaluate AT that exact line (only one number
+  // the book is offering, so it's the relevant one). When no market, walk
+  // common lines and pick the best probability-based side.
   const mean = g.prediction.expectedTotal;
-  let bestLineRT = -1;
-  let bestProbRT = 0;
-  let bestSideRT: 'over' | 'under' = 'over';
-  for (const line of [6.5, 7.5, 8.5, 9.5, 10.5, 11.5]) {
+  if (odds?.totals) {
+    const line = odds.totals.line;
     const pOver = pTotalOver(mean, line);
-    if (pOver >= threshold && pOver > bestProbRT) {
-      bestProbRT = pOver;
-      bestLineRT = line;
-      bestSideRT = 'over';
-    } else if (1 - pOver >= threshold && 1 - pOver > bestProbRT) {
-      bestProbRT = 1 - pOver;
-      bestLineRT = line;
-      bestSideRT = 'under';
+    const pUnder = 1 - pOver;
+    const overOdds = odds.totals.overPrice;
+    const underOdds = odds.totals.underPrice;
+    let bestSide: 'over' | 'under' | null = null;
+    if (passes(pOver, overOdds) && (!passes(pUnder, underOdds) || edgePP(pOver, overOdds) >= edgePP(pUnder, underOdds))) {
+      bestSide = 'over';
+    } else if (passes(pUnder, underOdds)) {
+      bestSide = 'under';
+    }
+    if (bestSide) {
+      const bestProbRT = bestSide === 'over' ? pOver : pUnder;
+      const bestPrice = bestSide === 'over' ? overOdds : underOdds;
+      const result: OpportunityResult = (() => {
+        if (!isFinal || !g.actual) return isLive ? 'live' : 'pending';
+        const hit = bestSide === 'over' ? g.actual.total > line : g.actual.total < line;
+        return hit ? 'hit' : 'miss';
+      })();
+      out.push({
+        gamePk: g.gamePk,
+        gameLabel,
+        firstPitch: g.gameDate,
+        status: g.status,
+        category: 'total-runs',
+        categoryLabel: 'Total runs',
+        side: `${bestSide.toUpperCase()} ${line.toFixed(1)}`,
+        line,
+        probability: bestProbRT,
+        prediction: `Total runs ${bestSide} ${line.toFixed(1)} (model ${(bestProbRT * 100).toFixed(1)}%)`,
+        explanation: `Model expects ${mean.toFixed(1)} combined runs. Park × weather × starter quality drive the ${bestSide}.`,
+        result,
+        actualText: g.actual
+          ? isFinal
+            ? `Final ${g.actual.total} R · ${bestSide} ${line.toFixed(1)} ${result === 'hit' ? '✓' : '✗'}`
+            : `Live ${g.actual.total} R through ${g.actual.inningsCompleted} inn`
+          : undefined,
+        market: attachMarket(bestProbRT, bestPrice, odds.bookCount),
+      });
+    }
+  } else {
+    // No market — fall back to walking common lines (prob-mode only)
+    let bestLineRT = -1;
+    let bestProbRT = 0;
+    let bestSideRT: 'over' | 'under' = 'over';
+    for (const line of [6.5, 7.5, 8.5, 9.5, 10.5, 11.5]) {
+      const pOver = pTotalOver(mean, line);
+      if (pOver >= threshold && pOver > bestProbRT) {
+        bestProbRT = pOver; bestLineRT = line; bestSideRT = 'over';
+      } else if (1 - pOver >= threshold && 1 - pOver > bestProbRT) {
+        bestProbRT = 1 - pOver; bestLineRT = line; bestSideRT = 'under';
+      }
+    }
+    if (bestLineRT > 0) {
+      const result: OpportunityResult = (() => {
+        if (!isFinal || !g.actual) return isLive ? 'live' : 'pending';
+        const hit = bestSideRT === 'over' ? g.actual.total > bestLineRT : g.actual.total < bestLineRT;
+        return hit ? 'hit' : 'miss';
+      })();
+      out.push({
+        gamePk: g.gamePk,
+        gameLabel,
+        firstPitch: g.gameDate,
+        status: g.status,
+        category: 'total-runs',
+        categoryLabel: 'Total runs',
+        side: `${bestSideRT.toUpperCase()} ${bestLineRT.toFixed(1)}`,
+        line: bestLineRT,
+        probability: bestProbRT,
+        prediction: `Total runs ${bestSideRT} ${bestLineRT.toFixed(1)} (model ${(bestProbRT * 100).toFixed(1)}%)`,
+        explanation: `Model expects ${mean.toFixed(1)} combined runs. Park × weather × starter quality drive the ${bestSideRT}.`,
+        result,
+        actualText: g.actual
+          ? isFinal
+            ? `Final ${g.actual.total} R · ${bestSideRT} ${bestLineRT.toFixed(1)} ${result === 'hit' ? '✓' : '✗'}`
+            : `Live ${g.actual.total} R through ${g.actual.inningsCompleted} inn`
+          : undefined,
+      });
     }
   }
-  if (bestLineRT > 0) {
+
+  // ── 6. RUN LINE (±1.5 spread) ───────────────────────────────────────────
+  // P(home covers −1.5) = P(margin ≥ 2). Use normal approx on (home − away).
+  const runDiffMean = g.prediction.expectedHomeRuns - g.prediction.expectedAwayRuns;
+  const runDiffSD = Math.sqrt(1.5 * (g.prediction.expectedHomeRuns + g.prediction.expectedAwayRuns));
+  // Continuity-corrected P(margin ≥ 2) ≈ 1 − Φ((1.5 − μ) / σ)
+  const pHomeCovers = runDiffSD > 0 ? 1 - normalCdf((1.5 - runDiffMean) / runDiffSD) : 0.5;
+  const pAwayCovers = 1 - pHomeCovers;
+
+  const rlHomeOdds = odds?.runLine?.homePrice;
+  const rlAwayOdds = odds?.runLine?.awayPrice;
+  const rlHomePoint = odds?.runLine?.homePoint ?? -1.5;
+  const rlAwayPoint = odds?.runLine?.awayPoint ?? +1.5;
+
+  let rlSide: 'home' | 'away' | null = null;
+  if (passes(pHomeCovers, rlHomeOdds)) rlSide = 'home';
+  else if (passes(pAwayCovers, rlAwayOdds)) rlSide = 'away';
+
+  if (rlSide) {
+    const isHome = rlSide === 'home';
+    const point = isHome ? rlHomePoint : rlAwayPoint;
+    const prob = isHome ? pHomeCovers : pAwayCovers;
+    const price = isHome ? rlHomeOdds : rlAwayOdds;
     const result: OpportunityResult = (() => {
       if (!isFinal || !g.actual) return isLive ? 'live' : 'pending';
-      const hit = bestSideRT === 'over' ? g.actual.total > bestLineRT : g.actual.total < bestLineRT;
+      const margin = g.actual.homeRuns - g.actual.awayRuns;
+      const homeCovers = margin >= 2;
+      const hit = isHome ? homeCovers : !homeCovers;
       return hit ? 'hit' : 'miss';
     })();
     out.push({
@@ -351,29 +512,45 @@ export function picksForGame(g: GameInsight, threshold = 0.60): ConvictionPick[]
       gameLabel,
       firstPitch: g.gameDate,
       status: g.status,
-      category: 'total-runs',
-      categoryLabel: 'Total runs',
-      side: `${bestSideRT.toUpperCase()} ${bestLineRT.toFixed(1)}`,
-      line: bestLineRT,
-      probability: bestProbRT,
-      prediction: `Total runs ${bestSideRT} ${bestLineRT.toFixed(1)} (model ${(bestProbRT * 100).toFixed(1)}%)`,
-      explanation: `Model expects ${mean.toFixed(1)} combined runs. Park × weather × starter quality drive the ${bestSideRT}.`,
+      category: 'run-line',
+      categoryLabel: 'Run line',
+      side: `${isHome ? homeAbbr : awayAbbr} ${point >= 0 ? '+' : ''}${point}`,
+      line: point,
+      probability: prob,
+      prediction: `${isHome ? homeAbbr : awayAbbr} ${point >= 0 ? '+' : ''}${point} (model ${(prob * 100).toFixed(1)}%)`,
+      explanation: isHome
+        ? `Model expects home to win by an average of ${runDiffMean.toFixed(1)} runs. ${(prob * 100).toFixed(0)}% chance home covers −1.5.`
+        : `Model expects a tighter game (avg margin ${runDiffMean.toFixed(1)}). ${(prob * 100).toFixed(0)}% chance away keeps it within 1 (or wins outright).`,
       result,
-      actualText: g.actual
-        ? isFinal
-          ? `Final ${g.actual.total} R · ${bestSideRT} ${bestLineRT.toFixed(1)} ${result === 'hit' ? '✓' : '✗'}`
-          : `Live ${g.actual.total} R through ${g.actual.inningsCompleted} inn`
-        : undefined,
+      actualText: g.actual && isFinal
+        ? `Final ${g.actual.awayRuns}–${g.actual.homeRuns} · margin ${g.actual.homeRuns - g.actual.awayRuns} · ${result === 'hit' ? '✓' : '✗'}`
+        : g.actual ? `Live ${g.actual.awayRuns}–${g.actual.homeRuns}` : undefined,
+      market: attachMarket(prob, price, odds?.bookCount),
     });
   }
 
   return out;
 }
 
-export function buildAllPicks(insights: GameInsight[], threshold = 0.60): ConvictionPick[] {
+export function buildAllPicks(
+  insights: GameInsight[],
+  opts: {
+    threshold?: number;
+    edgeThresholdPP?: number;
+    marketOdds?: Map<string, MarketOddsForGame> | null;
+    mode?: 'prob' | 'edge';
+  } = {}
+): ConvictionPick[] {
   const all: ConvictionPick[] = [];
   for (const g of insights) {
-    all.push(...picksForGame(g, threshold));
+    const key = matchupKey(g.away.name, g.home.name);
+    const market = opts.marketOdds?.get(key);
+    all.push(...picksForGame(g, {
+      threshold: opts.threshold,
+      edgeThresholdPP: opts.edgeThresholdPP,
+      marketOdds: market,
+      mode: opts.mode,
+    }));
   }
   return all;
 }
@@ -388,6 +565,51 @@ export function fairAmericanOdds(p: number): number {
   if (p <= 0 || p >= 1) return p >= 1 ? -10000 : 10000;
   if (p >= 0.5) return -Math.round((100 * p) / (1 - p));
   return Math.round((100 * (1 - p)) / p);
+}
+
+/**
+ * Convert American odds to the implied probability the market is pricing.
+ * For −X (favorite): X/(X+100). For +X (underdog): 100/(X+100).
+ * (This includes vig — sum of both sides' implied probabilities > 1 by ~5%
+ *  on a typical −110/−110 line.)
+ */
+export function impliedProb(americanOdds: number): number {
+  if (americanOdds === 0) return 0.5;
+  if (americanOdds < 0) {
+    const a = Math.abs(americanOdds);
+    return a / (a + 100);
+  }
+  return 100 / (americanOdds + 100);
+}
+
+/**
+ * Net unit payout per $1 risked on a WINNING bet at the given American odds.
+ *   −110  → 0.91
+ *   −150  → 0.67
+ *   +100  → 1.00
+ *   +150  → 1.50
+ */
+export function payoutAtOdds(americanOdds: number): number {
+  if (americanOdds === 0) return 1.0;
+  return americanOdds < 0 ? 100 / Math.abs(americanOdds) : americanOdds / 100;
+}
+
+/**
+ * Expected value per $1 bet at the given market odds, when the model
+ * believes the true probability is `modelP`.
+ *   EV = modelP × payout − (1 − modelP) × 1
+ * Positive = bet has +EV.
+ */
+export function evAtOdds(modelP: number, americanOdds: number): number {
+  return modelP * payoutAtOdds(americanOdds) - (1 - modelP);
+}
+
+/**
+ * Edge in percentage points = modelP − marketImpliedP.
+ * Positive = the model thinks the side is more likely than the market does.
+ */
+export function edgePP(modelP: number, americanOdds: number): number {
+  return (modelP - impliedProb(americanOdds)) * 100;
 }
 
 /**
@@ -416,14 +638,26 @@ export function aggregatePicks(picks: ConvictionPick[]) {
   const noGrade = picks.filter((p) => p.result === 'no-grade').length;
   const decided = hits + misses;
 
-  // Units calculated at FAIR (model-derived) American odds — each pick's
-  // payout is sized to its probability, not a flat −110. Wins pay
-  // (1−p)/p units, losses cost 1.0u.
+  // Units: if a market price is attached, use the actual sportsbook payout.
+  // Otherwise fall back to fair model-derived odds (what you'd earn at the
+  // model's own price — useful as a model-only benchmark).
   let units = 0;
+  let unitsAtFair = 0;
   for (const p of picks) {
-    if (p.result === 'hit') units += fairUnitPayout(p.probability);
-    else if (p.result === 'miss') units -= 1.0;
+    if (p.result === 'hit') {
+      units += p.market ? payoutAtOdds(p.market.americanOdds) : fairUnitPayout(p.probability);
+      unitsAtFair += fairUnitPayout(p.probability);
+    } else if (p.result === 'miss') {
+      units -= 1.0;
+      unitsAtFair -= 1.0;
+    }
   }
+
+  // Aggregate edge metrics across decided picks
+  const decidedWithMarket = picks.filter((p) => p.market && (p.result === 'hit' || p.result === 'miss'));
+  const avgEdgePP = decidedWithMarket.length
+    ? decidedWithMarket.reduce((s, p) => s + (p.market!.edgePP), 0) / decidedWithMarket.length
+    : 0;
 
   return {
     total: picks.length,
@@ -435,5 +669,8 @@ export function aggregatePicks(picks: ConvictionPick[]) {
     noGrade,
     hitRate: decided > 0 ? hits / decided : 0,
     units,
+    unitsAtFair,
+    avgEdgePP,
+    hasMarketData: picks.some((p) => p.market),
   };
 }
