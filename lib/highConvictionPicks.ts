@@ -731,20 +731,36 @@ export function fairUnitPayout(p: number): number {
 }
 
 /**
- * "Locks of the Day" — the highest-conviction picks across all categories,
- * with at most one pick per game so we don't stack 3 picks on the same matchup
+ * "Locks of the Day" — the most-profitable picks across all categories, with
+ * at most one pick per game so we don't stack 3 picks on the same matchup
  * (which would make the day's P&L correlated and concentrated).
  *
- * Conviction is already normalized per category (modelP − categoryThreshold),
- * so a 0.05 conviction NRFI ranks equivalently to a 0.05 conviction K-prop —
- * both are 5pp above their respective bars.
+ * Ranking priority:
+ *   1. Picks with real market data sort first, ranked by EV per unit (the only
+ *      honest "how much will I make per dollar bet" metric).
+ *   2. Picks without market data sort after, ranked by conviction (modelP −
+ *      categoryThreshold) so we still have a sensible fallback when odds aren't
+ *      available for that market (F5, Ks, NRFI today).
+ *
+ * Why EV over conviction: a 83% F5 pick has +33pp conviction but the price is
+ * −500, meaning you risk $5 to win $1 and need 83% to break even — no margin.
+ * A 65% ML pick at +120 has only +1pp conviction but EV per unit is +0.43, far
+ * more profitable per bet. EV-first ranking surfaces the latter.
  */
 export function topLocks(picks: ConvictionPick[], n = 5): ConvictionPick[] {
   // Take only un-decided & non-final picks for the "today" tier (live + pending).
   // Decided picks (hit/miss) are receipts, not actionable locks.
   const actionable = picks.filter((p) => p.result === 'pending' || p.result === 'live');
-  // Sort by conviction descending
-  const sorted = [...actionable].sort((a, b) => b.conviction - a.conviction);
+  // EV-first sort: market-data picks before market-less picks; within each
+  // tier, descending by EV / conviction.
+  const sorted = [...actionable].sort((a, b) => {
+    const aEv = a.market?.evPerUnit;
+    const bEv = b.market?.evPerUnit;
+    if (aEv != null && bEv != null) return bEv - aEv;
+    if (aEv != null) return -1;
+    if (bEv != null) return 1;
+    return b.conviction - a.conviction;
+  });
   // One pick per game — keep only the top-conviction pick from each gamePk
   const seen = new Set<number>();
   const out: ConvictionPick[] = [];

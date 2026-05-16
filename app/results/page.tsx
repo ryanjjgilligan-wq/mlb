@@ -444,10 +444,27 @@ function LockRow({ pick, rank }: { pick: ConvictionPick; rank: number }) {
               <span className="text-ink-muted">{pick.prediction.replace(`${pick.playerName} `, '')}</span>
             </div>
             <div className="text-2xs text-ink-faint mt-0.5">
-              <span className="label-micro mr-1">{meta.label} bar</span>
-              <span className="stat-num">{(bar * 100).toFixed(0)}%</span>
-              <span className="text-ink-faint mx-1">·</span>
-              <span className="stat-num text-signal-pos font-semibold">+{convictionPP.toFixed(1)}pp over bar</span>
+              {pick.market ? (
+                <>
+                  <span className="label-micro mr-1">EV per unit</span>
+                  <span className={`stat-num font-bold ${pick.market.evPerUnit >= 0.10 ? 'text-signal-pos' : 'text-signal-pos/80'}`}>
+                    {pick.market.evPerUnit >= 0 ? '+' : ''}{(pick.market.evPerUnit * 100).toFixed(1)}¢
+                  </span>
+                  <span className="text-ink-faint mx-1">·</span>
+                  <span className="stat-num">+{pick.market.edgePP.toFixed(1)}pp edge</span>
+                  <span className="text-ink-faint mx-1">·</span>
+                  <span className="stat-num">breakeven {(pick.market.impliedProb * 100).toFixed(1)}%</span>
+                </>
+              ) : (
+                <>
+                  <span className="label-micro mr-1">{meta.label} bar</span>
+                  <span className="stat-num">{(bar * 100).toFixed(0)}%</span>
+                  <span className="text-ink-faint mx-1">·</span>
+                  <span className="stat-num text-ink-muted">+{convictionPP.toFixed(1)}pp over bar</span>
+                  <span className="text-ink-faint mx-1">·</span>
+                  <span className="stat-num text-ink-faint">no market data</span>
+                </>
+              )}
               {isLive && (
                 <>
                   <span className="text-ink-faint mx-1">·</span>
