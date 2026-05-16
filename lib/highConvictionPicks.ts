@@ -202,12 +202,15 @@ export function picksForGame(
     evThresholdPerUnit?: number;
     /** Minimum CALIBRATED model probability required in edge mode (e.g. 0.60 = bet only sides we think hit ≥ 60% after shrink). Default 0.50. */
     minModelProb?: number;
+    /** Require market price to fall within a tight band (e.g. [-120, -105] for "standard −110 juice" lines only). Default: no constraint. */
+    priceBand?: [number, number];
     marketOdds?: MarketOddsForGame;
     mode?: 'prob' | 'edge';
   } = {}
 ): ConvictionPick[] {
   const evThreshold = opts.evThresholdPerUnit ?? 0.05;
   const minProb = opts.minModelProb ?? 0.50;
+  const priceBand = opts.priceBand;
   const odds = opts.marketOdds;
   const mode = opts.mode ?? (odds ? 'edge' : 'prob');
 
@@ -216,6 +219,9 @@ export function picksForGame(
   // In edge mode the filter is calibrated EV ≥ evThreshold (default +5¢/unit),
   // AND calibrated edge ≤ MAX_PLAUSIBLE_EDGE_PP (above is a model bug),
   // AND calibrated prob ≥ minModelProb (Sleep Well mode raises this to 0.60).
+  // If priceBand is set, the market price must also fall within that band
+  // (used to restrict to standard −110-juice markets — totals/run-line where
+  // the book has set roughly pick'em pricing).
   //
   // Why EV not edge: a +3pp edge on a −200 favorite is only +2¢/unit (a slow
   // bleed even with a true edge); a +3pp edge on a +120 dog is +9¢/unit (real
@@ -227,6 +233,7 @@ export function picksForGame(
       const calP = calibrate(modelP);
       const ev = evAtOdds(calP, americanOdds);
       const edge = edgePP(calP, americanOdds);
+      if (priceBand && (americanOdds < priceBand[0] || americanOdds > priceBand[1])) return false;
       return ev >= evThreshold && edge <= MAX_PLAUSIBLE_EDGE_PP && calP >= minProb;
     }
     return false;
@@ -641,6 +648,7 @@ export function buildAllPicks(
     edgeThresholdPP?: number;
     evThresholdPerUnit?: number;
     minModelProb?: number;
+    priceBand?: [number, number];
     marketOdds?: Map<string, MarketOddsForGame> | null;
     mode?: 'prob' | 'edge';
   } = {}
@@ -654,6 +662,7 @@ export function buildAllPicks(
       edgeThresholdPP: opts.edgeThresholdPP,
       evThresholdPerUnit: opts.evThresholdPerUnit,
       minModelProb: opts.minModelProb,
+      priceBand: opts.priceBand,
       marketOdds: market,
       mode: opts.mode,
     }));
