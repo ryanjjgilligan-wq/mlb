@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/cn';
-import { Activity, BarChart3, BookOpenCheck, Radio, Sparkles, Hourglass, Shield } from 'lucide-react';
+import { Activity, BarChart3, BookOpenCheck, Radio, Sparkles, Hourglass, Shield, Trophy } from 'lucide-react';
 import { SearchCommand } from './SearchCommand';
 import { LiveDot } from './LiveDot';
 import { ThemeToggle } from './ThemeToggle';
@@ -11,6 +11,7 @@ import { ThemeToggle } from './ThemeToggle';
 const nav = [
   { href: '/', label: 'Home', icon: Activity },
   { href: '/live', label: 'Live', icon: Radio },
+  { href: '/results', label: 'Results', icon: Trophy },
   { href: '/opportunities', label: 'Opportunities', icon: Sparkles },
   { href: '/first5', label: 'First 5', icon: Hourglass },
   { href: '/nrfi', label: 'NRFI', icon: Shield },
