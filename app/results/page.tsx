@@ -76,7 +76,7 @@ export default async function ResultsPage({ searchParams }: { searchParams: { da
           return {
             date: d,
             picks: buildAllPicks(s.games, {
-              edgeThresholdPP: 3.0,
+              evThresholdPerUnit: 0.05,  // +5¢/unit minimum EV — kills thin edges on heavy favorites
               marketOdds: odds,
               mode: odds ? 'edge' : 'prob',
               // No global threshold — let CATEGORY_THRESHOLDS apply per category
@@ -182,9 +182,10 @@ export default async function ResultsPage({ searchParams }: { searchParams: { da
         >
           <p className="text-sm text-ink-muted">
             Live sportsbook odds wired in for <span className="text-ink stat-num">{marketOdds.size}</span> games.
-            Picks filter at <span className="text-ink">3pp ≤ edge ≤ 12pp</span> (model prob − market implied,
-            after Brier-shrink calibration) and units use the actual market payout for each line. Picks claiming
-            more than 12pp edge are dropped as model bugs, not opportunities.
+            Picks filter on <span className="text-ink">EV ≥ +5¢/unit</span> after Brier-shrink calibration (not
+            raw edge — a 3pp edge on a −200 favorite is only +2¢/unit, while a 3pp edge on a +120 dog is +9¢).
+            Edge is also capped at 12pp upper bound to drop model-bug picks. Units use the actual market payout
+            for each line.
           </p>
         </Panel>
       )}
@@ -363,9 +364,11 @@ export default async function ResultsPage({ searchParams }: { searchParams: { da
           <li>
             <span className="text-ink">Two filtering modes</span>:{' '}
             <span className="text-ink">edge mode</span> (when <code className="stat-num">ODDS_API_KEY</code>{' '}
-            is set) accepts a side only when the model probability beats the market's implied probability by{' '}
-            <span className="stat-num">≥ 3 percentage points</span> AND model prob ≥ 50% — this is how sharp
-            bettors actually operate, since a 65% pick at −300 is a losing bet but a 52% pick at +120 is +EV.
+            is set) accepts a side only when expected value clears{' '}
+            <span className="stat-num">+5¢ per $1 risked</span> after Brier-shrink calibration — this is how
+            sharp bettors actually operate, since hit rate alone doesn't determine profitability (at −150 you
+            need 60% to break even; at +120 you need 45.5%). Filtering on EV instead of raw edge drops thin
+            edges on heavy favorites where the price is too short to overcome a long slump.
             <span className="text-ink"> Prob mode</span> (model-only fallback) accepts a side at the
             category's natural bar — different categories have different "easy" baselines, so a single
             60% threshold treats a coin-flip win as equal to a hard NRFI prediction. Per-category

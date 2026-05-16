@@ -196,27 +196,35 @@ export function picksForGame(
   opts: {
     /** @deprecated single global threshold — use CATEGORY_THRESHOLDS instead. Kept for back-compat. */
     threshold?: number;
-    edgeThresholdPP?: number;  // 3.0 default for edge mode (3pp)
+    /** @deprecated edge-pp filter replaced by EV floor — kept as the upper-bound bug filter only. */
+    edgeThresholdPP?: number;
+    /** Minimum EV per $1 risked (in dollars, e.g. 0.05 = +5¢/unit). Default 0.05. */
+    evThresholdPerUnit?: number;
     marketOdds?: MarketOddsForGame;
     mode?: 'prob' | 'edge';
   } = {}
 ): ConvictionPick[] {
-  const edgeThreshold = opts.edgeThresholdPP ?? 3.0;
+  const evThreshold = opts.evThresholdPerUnit ?? 0.05;
   const odds = opts.marketOdds;
   const mode = opts.mode ?? (odds ? 'edge' : 'prob');
 
   // Per-category passes helper. In prob mode the bar is CATEGORY_THRESHOLDS[cat]
   // (applied to RAW model prob — bars are tuned to raw output, not calibrated).
-  // In edge mode it's CALIBRATED edge ≥ edgeThreshold AND calibrated prob ≥ 50%
-  // AND edge ≤ MAX_PLAUSIBLE_EDGE_PP (anything beyond is a model bug, not a real
-  // opportunity, so we drop it from the bet list).
+  // In edge mode the filter is calibrated EV ≥ evThreshold (default +5¢/unit),
+  // AND calibrated edge ≤ MAX_PLAUSIBLE_EDGE_PP (above is a model bug),
+  // AND calibrated prob ≥ 50% (don't bet sides we think will lose).
+  //
+  // Why EV not edge: a +3pp edge on a −200 favorite is only +2¢/unit (a slow
+  // bleed even with a true edge); a +3pp edge on a +120 dog is +9¢/unit (real
+  // money). Same edge, very different value — EV captures this, edge doesn't.
   const passes = (cat: PickCategory, modelP: number, americanOdds: number | null | undefined): boolean => {
     const bar = opts.threshold ?? thresholdFor(cat, mode);
     if (modelP >= bar && (mode === 'prob' || americanOdds == null)) return true;
     if (mode === 'edge' && americanOdds != null) {
       const calP = calibrate(modelP);
+      const ev = evAtOdds(calP, americanOdds);
       const edge = edgePP(calP, americanOdds);
-      return edge >= edgeThreshold && edge <= MAX_PLAUSIBLE_EDGE_PP && calP >= 0.50;
+      return ev >= evThreshold && edge <= MAX_PLAUSIBLE_EDGE_PP && calP >= 0.50;
     }
     return false;
   };
@@ -628,6 +636,7 @@ export function buildAllPicks(
   opts: {
     threshold?: number;
     edgeThresholdPP?: number;
+    evThresholdPerUnit?: number;
     marketOdds?: Map<string, MarketOddsForGame> | null;
     mode?: 'prob' | 'edge';
   } = {}
@@ -639,6 +648,7 @@ export function buildAllPicks(
     all.push(...picksForGame(g, {
       threshold: opts.threshold,
       edgeThresholdPP: opts.edgeThresholdPP,
+      evThresholdPerUnit: opts.evThresholdPerUnit,
       marketOdds: market,
       mode: opts.mode,
     }));
