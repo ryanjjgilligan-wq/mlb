@@ -26,8 +26,13 @@ export type MarketOddsForGame = {
   bookCount: number;
 };
 
+// SECURITY NOTE: this key is a hardcoded fallback because the Vercel env var
+// wasn't being picked up. Rotate this key on the-odds-api.com and remove this
+// fallback as soon as ODDS_API_KEY is wired up properly in the dashboard.
+const FALLBACK_ODDS_KEY = '8b05d78a838b0617be03c7afd67f501d';
+
 export async function getMarketOdds(): Promise<Map<string, MarketOddsForGame> | null> {
-  const apiKey = process.env.ODDS_API_KEY;
+  const apiKey = process.env.ODDS_API_KEY || FALLBACK_ODDS_KEY;
   if (!apiKey) return null;
 
   const url = `${ODDS_BASE}/sports/baseball_mlb/odds?regions=us&markets=h2h,totals,spreads&oddsFormat=american&apiKey=${apiKey}`;
@@ -141,5 +146,5 @@ function median(arr: number[]): number {
 }
 
 export function isOddsConfigured(): boolean {
-  return !!process.env.ODDS_API_KEY;
+  return !!(process.env.ODDS_API_KEY || FALLBACK_ODDS_KEY);
 }
