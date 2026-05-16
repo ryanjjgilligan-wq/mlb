@@ -19,6 +19,40 @@ import { matchupKey } from './odds';
 export type PickCategory = 'winner' | 'pitcher-k' | 'f5' | 'nrfi-yrfi' | 'total-runs' | 'run-line';
 
 /**
+ * Calibration shrink factor — multiplicatively pulls every model probability
+ * toward 50% before computing edges. Necessary because v1 probabilistic models
+ * are systematically overconfident: a model that says 80% only hits ~65% of
+ * the time in practice. 0.65 is the Brier-optimal shrink we'd expect from a
+ * decent but un-tuned MLB winner model. Should be re-fit from realized hit
+ * rates once we have a few weeks of receipts.
+ *
+ *   shrunk = 0.5 + (raw − 0.5) × CALIBRATION_SHRINK
+ *
+ *   raw 0.50 → 0.50
+ *   raw 0.60 → 0.565
+ *   raw 0.75 → 0.6625
+ *   raw 0.88 → 0.747
+ */
+const CALIBRATION_SHRINK = 0.65;
+
+/**
+ * Hard upper bound on plausible edge in percentage points after calibration.
+ * Any pick claiming more than this is almost certainly a model bug (bad
+ * probability, mispriced line, stale data) rather than a real opportunity —
+ * sharp lines max out around 5-8pp of edge in MLB. We surface these as
+ * info-only (no bet recommendation) rather than top-of-board locks.
+ */
+const MAX_PLAUSIBLE_EDGE_PP = 12;
+
+/**
+ * Apply Brier-optimal shrink toward 50%. Idempotent if applied to an already-
+ * calibrated probability (will shrink further, so only apply ONCE per pick).
+ */
+export function calibrate(p: number): number {
+  return 0.5 + (p - 0.5) * CALIBRATION_SHRINK;
+}
+
+/**
  * Per-category model-probability thresholds. Different categories have
  * different "easy" baselines — moneyline favorites hit ~58% naturally, so a
  * 60% ML pick is barely better than chalk, but a 60% NRFI is real signal.
@@ -135,11 +169,14 @@ function ord(n: number) {
  */
 function attachMarket(modelP: number, americanOdds: number | null | undefined, bookCount = 0): MarketAttachment | undefined {
   if (americanOdds == null || !Number.isFinite(americanOdds)) return undefined;
+  // modelP coming in here is RAW. Calibrate before computing edge so the
+  // displayed numbers reflect a realistic probability, not an overconfident one.
+  const calP = calibrate(modelP);
   return {
     americanOdds,
     impliedProb: impliedProb(americanOdds),
-    edgePP: edgePP(modelP, americanOdds),
-    evPerUnit: evAtOdds(modelP, americanOdds),
+    edgePP: edgePP(calP, americanOdds),
+    evPerUnit: evAtOdds(calP, americanOdds),
     bookCount,
   };
 }
@@ -168,19 +205,24 @@ export function picksForGame(
   const odds = opts.marketOdds;
   const mode = opts.mode ?? (odds ? 'edge' : 'prob');
 
-  // Per-category passes helper. In prob mode the bar is CATEGORY_THRESHOLDS[cat].
-  // In edge mode it's edge ≥ edgeThreshold AND modelP ≥ 50%.
-  // (opts.threshold, when present, overrides the per-category bar — back-compat.)
+  // Per-category passes helper. In prob mode the bar is CATEGORY_THRESHOLDS[cat]
+  // (applied to RAW model prob — bars are tuned to raw output, not calibrated).
+  // In edge mode it's CALIBRATED edge ≥ edgeThreshold AND calibrated prob ≥ 50%
+  // AND edge ≤ MAX_PLAUSIBLE_EDGE_PP (anything beyond is a model bug, not a real
+  // opportunity, so we drop it from the bet list).
   const passes = (cat: PickCategory, modelP: number, americanOdds: number | null | undefined): boolean => {
     const bar = opts.threshold ?? thresholdFor(cat, mode);
     if (modelP >= bar && (mode === 'prob' || americanOdds == null)) return true;
     if (mode === 'edge' && americanOdds != null) {
-      return edgePP(modelP, americanOdds) >= edgeThreshold && modelP >= 0.50;
+      const calP = calibrate(modelP);
+      const edge = edgePP(calP, americanOdds);
+      return edge >= edgeThreshold && edge <= MAX_PLAUSIBLE_EDGE_PP && calP >= 0.50;
     }
     return false;
   };
 
-  // Conviction = modelP − category bar. Bigger = more confident vs baseline.
+  // Conviction = (raw) modelP − category bar. Bigger = more confident vs baseline.
+  // Stays raw-based so per-category bars and conviction are on the same scale.
   const convictionFor = (cat: PickCategory, modelP: number): number => {
     return modelP - thresholdFor(cat, mode);
   };

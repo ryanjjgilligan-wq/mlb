@@ -55,15 +55,15 @@ export async function getMarketOdds(): Promise<Map<string, MarketOddsForGame> | 
     // For each market type, take the BEST (most favorable) price across books.
     // For an over/under or ML, "best" depends on the side — but for a single
     // consensus number we just take the median to avoid book-specific noise.
-    let mlHomePrices: number[] = [];
-    let mlAwayPrices: number[] = [];
-    let totalLines: number[] = [];
-    let overPrices: number[] = [];
-    let underPrices: number[] = [];
-    let rlHomePoints: number[] = [];
-    let rlHomePrices: number[] = [];
-    let rlAwayPoints: number[] = [];
-    let rlAwayPrices: number[] = [];
+    const mlHomePrices: number[] = [];
+    const mlAwayPrices: number[] = [];
+    // For totals + spreads, group prices BY THE POINT they're attached to.
+    // Books offer alt lines (e.g. totals at 7.5/8/8.5) and lumping prices
+    // across different points produces a meaningless "median" price.
+    const overByLine = new Map<number, number[]>();
+    const underByLine = new Map<number, number[]>();
+    const rlHomeByPoint = new Map<number, number[]>();
+    const rlAwayByPoint = new Map<number, number[]>();
 
     for (const bk of event.bookmakers ?? []) {
       for (const m of bk.markets ?? []) {
@@ -73,26 +73,69 @@ export async function getMarketOdds(): Promise<Map<string, MarketOddsForGame> | 
             else if (o.name === awayName && typeof o.price === 'number') mlAwayPrices.push(o.price);
           }
         } else if (m.key === 'totals') {
-          // Look for the median total line offered
           for (const o of m.outcomes ?? []) {
-            if (typeof o.point === 'number') {
-              if (!totalLines.includes(o.point)) totalLines.push(o.point);
-              if (o.name === 'Over') overPrices.push(o.price);
-              else if (o.name === 'Under') underPrices.push(o.price);
-            }
+            if (typeof o.point !== 'number' || typeof o.price !== 'number') continue;
+            const bucket = o.name === 'Over' ? overByLine : o.name === 'Under' ? underByLine : null;
+            if (!bucket) continue;
+            const arr = bucket.get(o.point) ?? [];
+            arr.push(o.price);
+            bucket.set(o.point, arr);
           }
         } else if (m.key === 'spreads') {
           for (const o of m.outcomes ?? []) {
             if (typeof o.point !== 'number' || typeof o.price !== 'number') continue;
-            if (o.name === homeName) {
-              rlHomePoints.push(o.point);
-              rlHomePrices.push(o.price);
-            } else if (o.name === awayName) {
-              rlAwayPoints.push(o.point);
-              rlAwayPrices.push(o.price);
-            }
+            const bucket = o.name === homeName ? rlHomeByPoint : o.name === awayName ? rlAwayByPoint : null;
+            if (!bucket) continue;
+            const arr = bucket.get(o.point) ?? [];
+            arr.push(o.price);
+            bucket.set(o.point, arr);
           }
         }
+      }
+    }
+
+    // Consensus totals line = the point offered by the MOST books (modal),
+    // then median price at that specific line.
+    let totals: { line: number; overPrice: number; underPrice: number } | null = null;
+    const totalLinePoints = new Set([...overByLine.keys(), ...underByLine.keys()]);
+    if (totalLinePoints.size > 0) {
+      let bestLine = -1;
+      let bestCount = 0;
+      for (const line of totalLinePoints) {
+        const count = (overByLine.get(line)?.length ?? 0) + (underByLine.get(line)?.length ?? 0);
+        if (count > bestCount) { bestCount = count; bestLine = line; }
+      }
+      const overs = overByLine.get(bestLine) ?? [];
+      const unders = underByLine.get(bestLine) ?? [];
+      if (overs.length > 0 && unders.length > 0) {
+        totals = { line: bestLine, overPrice: median(overs), underPrice: median(unders) };
+      }
+    }
+
+    // Run line: prefer the standard ±1.5; fall back to the modal point if 1.5
+    // isn't quoted by enough books.
+    let runLine: { homePoint: number; homePrice: number; awayPoint: number; awayPrice: number } | null = null;
+    const homePoints = [...rlHomeByPoint.keys()];
+    if (homePoints.length > 0) {
+      let homePoint = -1.5;
+      if (!rlHomeByPoint.has(-1.5) || (rlHomeByPoint.get(-1.5)?.length ?? 0) < 2) {
+        // pick modal home point
+        let bestCount = 0;
+        for (const p of homePoints) {
+          const c = rlHomeByPoint.get(p)?.length ?? 0;
+          if (c > bestCount) { bestCount = c; homePoint = p; }
+        }
+      }
+      const awayPoint = -homePoint;
+      const homePrices = rlHomeByPoint.get(homePoint) ?? [];
+      const awayPrices = rlAwayByPoint.get(awayPoint) ?? [];
+      if (homePrices.length > 0 && awayPrices.length > 0) {
+        runLine = {
+          homePoint,
+          homePrice: median(homePrices),
+          awayPoint,
+          awayPrice: median(awayPrices),
+        };
       }
     }
 
@@ -103,21 +146,8 @@ export async function getMarketOdds(): Promise<Map<string, MarketOddsForGame> | 
       ml: mlHomePrices.length && mlAwayPrices.length
         ? { home: median(mlHomePrices), away: median(mlAwayPrices) }
         : null,
-      totals: totalLines.length && overPrices.length && underPrices.length
-        ? {
-            line: median(totalLines),
-            overPrice: median(overPrices),
-            underPrice: median(underPrices),
-          }
-        : null,
-      runLine: rlHomePoints.length && rlAwayPoints.length
-        ? {
-            homePoint: median(rlHomePoints),
-            homePrice: median(rlHomePrices),
-            awayPoint: median(rlAwayPoints),
-            awayPrice: median(rlAwayPrices),
-          }
-        : null,
+      totals,
+      runLine,
       bookCount: event.bookmakers?.length ?? 0,
     });
   }

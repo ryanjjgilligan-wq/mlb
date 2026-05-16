@@ -182,8 +182,9 @@ export default async function ResultsPage({ searchParams }: { searchParams: { da
         >
           <p className="text-sm text-ink-muted">
             Live sportsbook odds wired in for <span className="text-ink stat-num">{marketOdds.size}</span> games.
-            Picks filter at <span className="text-ink">≥ 3pp edge</span> (model prob − market implied) and units
-            use the actual market payout for each line. Real-world P&amp;L tracks these numbers.
+            Picks filter at <span className="text-ink">3pp ≤ edge ≤ 12pp</span> (model prob − market implied,
+            after Brier-shrink calibration) and units use the actual market payout for each line. Picks claiming
+            more than 12pp edge are dropped as model bugs, not opportunities.
           </p>
         </Panel>
       )}
