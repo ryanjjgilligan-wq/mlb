@@ -200,11 +200,14 @@ export function picksForGame(
     edgeThresholdPP?: number;
     /** Minimum EV per $1 risked (in dollars, e.g. 0.05 = +5¢/unit). Default 0.05. */
     evThresholdPerUnit?: number;
+    /** Minimum CALIBRATED model probability required in edge mode (e.g. 0.60 = bet only sides we think hit ≥ 60% after shrink). Default 0.50. */
+    minModelProb?: number;
     marketOdds?: MarketOddsForGame;
     mode?: 'prob' | 'edge';
   } = {}
 ): ConvictionPick[] {
   const evThreshold = opts.evThresholdPerUnit ?? 0.05;
+  const minProb = opts.minModelProb ?? 0.50;
   const odds = opts.marketOdds;
   const mode = opts.mode ?? (odds ? 'edge' : 'prob');
 
@@ -212,7 +215,7 @@ export function picksForGame(
   // (applied to RAW model prob — bars are tuned to raw output, not calibrated).
   // In edge mode the filter is calibrated EV ≥ evThreshold (default +5¢/unit),
   // AND calibrated edge ≤ MAX_PLAUSIBLE_EDGE_PP (above is a model bug),
-  // AND calibrated prob ≥ 50% (don't bet sides we think will lose).
+  // AND calibrated prob ≥ minModelProb (Sleep Well mode raises this to 0.60).
   //
   // Why EV not edge: a +3pp edge on a −200 favorite is only +2¢/unit (a slow
   // bleed even with a true edge); a +3pp edge on a +120 dog is +9¢/unit (real
@@ -224,7 +227,7 @@ export function picksForGame(
       const calP = calibrate(modelP);
       const ev = evAtOdds(calP, americanOdds);
       const edge = edgePP(calP, americanOdds);
-      return ev >= evThreshold && edge <= MAX_PLAUSIBLE_EDGE_PP && calP >= 0.50;
+      return ev >= evThreshold && edge <= MAX_PLAUSIBLE_EDGE_PP && calP >= minProb;
     }
     return false;
   };
@@ -637,6 +640,7 @@ export function buildAllPicks(
     threshold?: number;
     edgeThresholdPP?: number;
     evThresholdPerUnit?: number;
+    minModelProb?: number;
     marketOdds?: Map<string, MarketOddsForGame> | null;
     mode?: 'prob' | 'edge';
   } = {}
@@ -649,6 +653,7 @@ export function buildAllPicks(
       threshold: opts.threshold,
       edgeThresholdPP: opts.edgeThresholdPP,
       evThresholdPerUnit: opts.evThresholdPerUnit,
+      minModelProb: opts.minModelProb,
       marketOdds: market,
       mode: opts.mode,
     }));

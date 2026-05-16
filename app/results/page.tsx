@@ -76,7 +76,11 @@ export default async function ResultsPage({ searchParams }: { searchParams: { da
           return {
             date: d,
             picks: buildAllPicks(s.games, {
-              evThresholdPerUnit: 0.05,  // +5¢/unit minimum EV — kills thin edges on heavy favorites
+              // Sleep Well mode: high prob × strong EV × no model bugs.
+              // Designed to minimize losing-day count by skipping days entirely
+              // when no real edge exists.
+              evThresholdPerUnit: 0.08,   // ≥ +8¢ per $1 risked
+              minModelProb: 0.60,          // ≥ 60% calibrated model prob → high hit-rate bets
               marketOdds: odds,
               mode: odds ? 'edge' : 'prob',
               // No global threshold — let CATEGORY_THRESHOLDS apply per category
@@ -129,9 +133,16 @@ export default async function ResultsPage({ searchParams }: { searchParams: { da
     });
   }
 
-  // Locks of the Day — top 5 highest-conviction picks (one per game) across
-  // categories. Only shows live + pending picks; decided picks are receipts.
-  const locks = todaySlate.date === today ? topLocks(todaySlate.picks, 5) : [];
+  // Sleep Well plays — top 3 highest-EV picks (one per game) across categories.
+  // Only shows live + pending picks; decided picks are receipts. Capped at 3 so
+  // a single day's P&L isn't concentrated, and to keep the bar high (only the
+  // most-profitable picks make it).
+  const locks = todaySlate.date === today ? topLocks(todaySlate.picks, 3) : [];
+  // Picks with market data attached — these are the "actionable" bets for Sleep Well.
+  const marketBackedActionable = todaySlate.picks.filter(
+    (p) => p.market && (p.result === 'pending' || p.result === 'live')
+  );
+  const isSitOutDay = todaySlate.date === today && marketBackedActionable.length === 0 && oddsConfigured;
 
   return (
     <div className="max-w-[1300px] mx-auto px-4 py-6 space-y-6">
@@ -181,11 +192,11 @@ export default async function ResultsPage({ searchParams }: { searchParams: { da
           title={<span className="flex items-center gap-2"><Scale size={14} className="text-signal-pos" /> Edge mode active</span>}
         >
           <p className="text-sm text-ink-muted">
-            Live sportsbook odds wired in for <span className="text-ink stat-num">{marketOdds.size}</span> games.
-            Picks filter on <span className="text-ink">EV ≥ +5¢/unit</span> after Brier-shrink calibration (not
-            raw edge — a 3pp edge on a −200 favorite is only +2¢/unit, while a 3pp edge on a +120 dog is +9¢).
-            Edge is also capped at 12pp upper bound to drop model-bug picks. Units use the actual market payout
-            for each line.
+            <span className="text-ink">Sleep Well mode active</span>. Live sportsbook odds wired in for{' '}
+            <span className="text-ink stat-num">{marketOdds.size}</span> games. Picks must clear ALL of:{' '}
+            <span className="text-ink">model prob ≥ 60%</span> · <span className="text-ink">EV ≥ +8¢/unit</span>{' '}
+            · <span className="text-ink">edge ≤ 10pp</span>, all after Brier-shrink calibration. Capped at the
+            top 3 plays per day. The whole point: fewer losing days, even if it means betting less.
           </p>
         </Panel>
       )}
@@ -249,19 +260,48 @@ export default async function ResultsPage({ searchParams }: { searchParams: { da
         </div>
       </Panel>
 
-      {/* LOCKS OF THE DAY */}
+      {/* SIT OUT DAY */}
+      {isSitOutDay && (
+        <Panel
+          title={
+            <span className="flex items-center gap-2">
+              <Crown size={16} className="text-ink-muted" />
+              SIT OUT TODAY
+              <span className="text-2xs px-1.5 py-0.5 rounded border border-line bg-bg-raised text-ink-muted stat-num font-bold">
+                0 PLAYS
+              </span>
+            </span>
+          }
+          subtitle="No picks clear the Sleep Well bar today — the right move is no bet"
+        >
+          <div className="text-sm text-ink-muted space-y-2">
+            <p>
+              Across today's <span className="text-ink stat-num">{todaySlate.games}</span> games, no side cleared
+              the Sleep Well filter: <span className="text-ink">model probability ≥ 60%</span> AND{' '}
+              <span className="text-ink">EV ≥ +8¢/unit</span> AND <span className="text-ink">edge ≤ 10pp</span>{' '}
+              after Brier-shrink calibration.
+            </p>
+            <p>
+              A skipped day is mathematically a 0-unit day — not a loss. This is the single biggest lever for
+              minimizing losing days. Check back tomorrow.
+            </p>
+          </div>
+        </Panel>
+      )}
+
+      {/* SLEEP WELL PLAYS */}
       {locks.length > 0 && (
         <Panel
           title={
             <span className="flex items-center gap-2">
               <Crown size={16} className="text-accent" />
-              Locks of the Day
+              Plays of the Day
               <span className="text-2xs px-1.5 py-0.5 rounded border border-accent/30 bg-accent/10 text-accent stat-num font-bold">
-                TOP {locks.length}
+                {locks.length} {locks.length === 1 ? 'PLAY' : 'PLAYS'}
               </span>
             </span>
           }
-          subtitle="Highest-conviction picks across all categories — at most one per game"
+          subtitle="Sleep Well mode: highest-EV picks (≥ +8¢/unit, ≥ 60% calibrated prob) — at most one per game"
           flush
         >
           <ul className="divide-y divide-line-subtle">
@@ -362,13 +402,15 @@ export default async function ResultsPage({ searchParams }: { searchParams: { da
             the moment the slate is generated, before first pitch.
           </li>
           <li>
-            <span className="text-ink">Two filtering modes</span>:{' '}
-            <span className="text-ink">edge mode</span> (when <code className="stat-num">ODDS_API_KEY</code>{' '}
-            is set) accepts a side only when expected value clears{' '}
-            <span className="stat-num">+5¢ per $1 risked</span> after Brier-shrink calibration — this is how
-            sharp bettors actually operate, since hit rate alone doesn't determine profitability (at −150 you
-            need 60% to break even; at +120 you need 45.5%). Filtering on EV instead of raw edge drops thin
-            edges on heavy favorites where the price is too short to overcome a long slump.
+            <span className="text-ink">Sleep Well mode</span> (default when{' '}
+            <code className="stat-num">ODDS_API_KEY</code> is set): a pick must clear ALL of{' '}
+            <span className="stat-num">≥ 60% calibrated prob</span>,{' '}
+            <span className="stat-num">≥ +8¢/unit EV</span>, and{' '}
+            <span className="stat-num">≤ 10pp edge</span> (above is model bug, not opportunity). Designed to
+            minimize losing-day count by surfacing only high-hit-rate × profitable bets — when nothing qualifies,
+            the page shows <span className="text-ink">SIT OUT TODAY</span>, which is mathematically a 0-unit day
+            (not a loss). At −150 you need 60% to break even, at +120 only 45.5% — filtering on EV instead of
+            raw edge drops thin edges on heavy favorites where the price is too short.
             <span className="text-ink"> Prob mode</span> (model-only fallback) accepts a side at the
             category's natural bar — different categories have different "easy" baselines, so a single
             60% threshold treats a coin-flip win as equal to a hard NRFI prediction. Per-category
@@ -377,10 +419,10 @@ export default async function ResultsPage({ searchParams }: { searchParams: { da
             <span className="stat-num">NRFI 62%</span> · <span className="stat-num">totals 60%</span>.
           </li>
           <li>
-            <span className="text-ink">Locks of the Day</span> surfaces the top 5 highest-conviction
-            picks of the slate, ranked by how far each modelP exceeds its category bar (so a 65% pick
-            in a 58%-bar category beats a 67% pick in a 64%-bar category). At most one pick per game,
-            so the day's P&amp;L isn't concentrated on a single matchup.
+            <span className="text-ink">Plays of the Day</span> surfaces the top 3 highest-EV picks
+            of the slate, ranked by expected value per unit. At most one pick per game so the day's
+            P&amp;L isn't concentrated on a single matchup. Falls back to conviction rank when no
+            market data is available for a category.
           </li>
           <li>
             <span className="text-ink">Win % = hits / (hits + misses).</span> Pushes, pending, and live picks
