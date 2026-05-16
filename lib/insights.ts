@@ -56,6 +56,9 @@ export type GameInsight = {
     /** Runs in the first inning (both halves). */
     firstInningRuns: number;
     firstInningComplete: boolean;
+    /** Actual strikeouts thrown by each starter (when known). */
+    awayStarterKs?: number;
+    homeStarterKs?: number;
   };
 };
 
@@ -241,6 +244,18 @@ async function buildGameInsight(
     const firstInningRuns = (firstInning?.away?.runs ?? 0) + (firstInning?.home?.runs ?? 0);
     const inningsCompleted = innings.filter((i: any) => i?.away?.runs !== undefined && i?.home?.runs !== undefined).length;
 
+    // Starter actual K counts — pulled from the boxscore when each starter's
+    // pitching line is available. Useful for grading pitcher-K props.
+    const boxscore = feed.liveData?.boxscore;
+    const awayStarterId = game.teams.away.probablePitcher?.id;
+    const homeStarterId = game.teams.home.probablePitcher?.id;
+    const awayStarterKs = awayStarterId
+      ? Number(boxscore?.teams?.away?.players?.[`ID${awayStarterId}`]?.stats?.pitching?.strikeOuts ?? 0)
+      : undefined;
+    const homeStarterKs = homeStarterId
+      ? Number(boxscore?.teams?.home?.players?.[`ID${homeStarterId}`]?.stats?.pitching?.strikeOuts ?? 0)
+      : undefined;
+
     actual = {
       awayRuns,
       homeRuns,
@@ -250,6 +265,8 @@ async function buildGameInsight(
       f5Complete,
       firstInningRuns,
       firstInningComplete,
+      awayStarterKs,
+      homeStarterKs,
     };
   }
 
