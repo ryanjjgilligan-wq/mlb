@@ -19,6 +19,29 @@ import { matchupKey } from './odds';
 export type PickCategory = 'winner' | 'pitcher-k' | 'f5' | 'nrfi-yrfi' | 'total-runs' | 'run-line';
 
 /**
+ * Per-category model-probability thresholds. Different categories have
+ * different "easy" baselines — moneyline favorites hit ~58% naturally, so a
+ * 60% ML pick is barely better than chalk, but a 60% NRFI is real signal.
+ * These bars set the minimum modelP we'll record a pick at.
+ */
+export const CATEGORY_THRESHOLDS: Record<PickCategory, number> = {
+  winner: 0.64,        // ML — favorites already win 58% raw, so demand a real edge
+  'run-line': 0.58,    // run-line is closer to a coin flip, lower bar OK
+  'pitcher-k': 0.58,   // K props rarely show extreme model edges
+  f5: 0.60,            // F5 totals
+  'nrfi-yrfi': 0.62,   // base NRFI rate is ~57%, so demand 5pp above
+  'total-runs': 0.60,  // run totals
+};
+
+/**
+ * Returns the threshold applicable for a given category in a given mode.
+ * In edge mode we use a single floor (0.50) since edge does the filtering.
+ */
+function thresholdFor(cat: PickCategory, mode: 'prob' | 'edge'): number {
+  return mode === 'edge' ? 0.50 : CATEGORY_THRESHOLDS[cat];
+}
+
+/**
  * Market-side info attached to a pick when we have real odds. Edge is the
  * gap between modelP and the market's implied probability (in pp). EV is
  * the expected unit return per $1 bet at the actual market price.
@@ -51,6 +74,12 @@ export type ConvictionPick = {
   playerName?: string;
   /** Real-market odds + edge info when available. */
   market?: MarketAttachment;
+  /**
+   * Conviction score = modelP − categoryThreshold. Always ≥ 0 for surfaced
+   * picks. Higher = more confident relative to that category's natural bar.
+   * Used to rank cross-category for the "Locks of the Day" tier.
+   */
+  conviction: number;
 };
 
 const POISSON_MEMO = new Map<string, number>();
@@ -128,26 +157,32 @@ function attachMarket(modelP: number, americanOdds: number | null | undefined, b
 export function picksForGame(
   g: GameInsight,
   opts: {
-    threshold?: number;        // 0.60 default for prob mode
+    /** @deprecated single global threshold — use CATEGORY_THRESHOLDS instead. Kept for back-compat. */
+    threshold?: number;
     edgeThresholdPP?: number;  // 3.0 default for edge mode (3pp)
     marketOdds?: MarketOddsForGame;
     mode?: 'prob' | 'edge';
   } = {}
 ): ConvictionPick[] {
-  const threshold = opts.threshold ?? 0.60;
   const edgeThreshold = opts.edgeThresholdPP ?? 3.0;
   const odds = opts.marketOdds;
   const mode = opts.mode ?? (odds ? 'edge' : 'prob');
 
-  // Decision helper — passes if either:
-  //   - mode === 'prob' and modelP ≥ threshold
-  //   - mode === 'edge' and we have an odds price AND edge ≥ threshold
-  const passes = (modelP: number, americanOdds: number | null | undefined): boolean => {
-    if (modelP >= threshold && (mode === 'prob' || americanOdds == null)) return true;
+  // Per-category passes helper. In prob mode the bar is CATEGORY_THRESHOLDS[cat].
+  // In edge mode it's edge ≥ edgeThreshold AND modelP ≥ 50%.
+  // (opts.threshold, when present, overrides the per-category bar — back-compat.)
+  const passes = (cat: PickCategory, modelP: number, americanOdds: number | null | undefined): boolean => {
+    const bar = opts.threshold ?? thresholdFor(cat, mode);
+    if (modelP >= bar && (mode === 'prob' || americanOdds == null)) return true;
     if (mode === 'edge' && americanOdds != null) {
       return edgePP(modelP, americanOdds) >= edgeThreshold && modelP >= 0.50;
     }
     return false;
+  };
+
+  // Conviction = modelP − category bar. Bigger = more confident vs baseline.
+  const convictionFor = (cat: PickCategory, modelP: number): number => {
+    return modelP - thresholdFor(cat, mode);
   };
 
   const out: ConvictionPick[] = [];
@@ -161,7 +196,7 @@ export function picksForGame(
   // ── 1. WINNER (moneyline) ────────────────────────────────────────────────
   const mlHomeOdds = odds?.ml?.home;
   const mlAwayOdds = odds?.ml?.away;
-  if (passes(pHomeWin, mlHomeOdds)) {
+  if (passes('winner', pHomeWin, mlHomeOdds)) {
     const result: OpportunityResult =
       isFinal ? (g.actual && g.actual.homeRuns > g.actual.awayRuns ? 'hit' : 'miss') :
       isLive ? 'live' : 'pending';
@@ -183,8 +218,9 @@ export function picksForGame(
           : `Live ${g.actual.awayRuns}–${g.actual.homeRuns} · ${g.actual.inningsCompleted} inn done`
         : undefined,
       market: attachMarket(pHomeWin, mlHomeOdds, odds?.bookCount),
+      conviction: convictionFor('winner', pHomeWin),
     });
-  } else if (passes(1 - pHomeWin, mlAwayOdds)) {
+  } else if (passes('winner', 1 - pHomeWin, mlAwayOdds)) {
     const pAway = 1 - pHomeWin;
     const result: OpportunityResult =
       isFinal ? (g.actual && g.actual.awayRuns > g.actual.homeRuns ? 'hit' : 'miss') :
@@ -207,6 +243,7 @@ export function picksForGame(
           : `Live ${g.actual.awayRuns}–${g.actual.homeRuns} · ${g.actual.inningsCompleted} inn done`
         : undefined,
       market: attachMarket(pAway, mlAwayOdds, odds?.bookCount),
+      conviction: convictionFor('winner', pAway),
     });
   }
 
@@ -229,9 +266,10 @@ export function picksForGame(
     const lambda = prop.expectedStrikeouts;
     let bestLine = -1;
     let bestProb = 0;
+    const kBar = opts.threshold ?? thresholdFor('pitcher-k', mode);
     for (const line of [4.5, 5.5, 6.5, 7.5, 8.5, 9.5]) {
       const p = 1 - poissonCdf(Math.floor(line), lambda);
-      if (p >= threshold && p > bestProb) {
+      if (p >= kBar && p > bestProb) {
         bestProb = p; bestLine = line;
       }
       // edge mode: take the highest-prob line that clears edge threshold
@@ -267,6 +305,7 @@ export function picksForGame(
             : undefined,
         playerId: starter.id,
         playerName: starter.name,
+        conviction: convictionFor('pitcher-k', bestProb),
       });
     }
   }
@@ -289,8 +328,9 @@ export function picksForGame(
   // Note: this means F5 line picks aren't using recency-weighted team rates;
   // they're using F5 model with average team rates. Refine in a follow-up.
 
+  const f5Bar = opts.threshold ?? thresholdFor('f5', mode);
   for (const tail of f5.pTotalOver) {
-    if (tail.prob >= threshold) {
+    if (tail.prob >= f5Bar) {
       const result: OpportunityResult =
         isFinal && g.actual ? (g.actual.f5Runs > tail.line ? 'hit' : 'miss') :
         isLive && g.actual?.f5Complete ? (g.actual.f5Runs > tail.line ? 'hit' : 'miss') :
@@ -311,9 +351,10 @@ export function picksForGame(
         actualText: g.actual
           ? `${g.actual.f5Complete ? 'F5 final' : 'Live'} ${g.actual.f5Runs} R · over ${tail.line.toFixed(1)} ${g.actual.f5Runs > tail.line ? '✓' : g.actual.f5Complete ? '✗' : '(in progress)'}`
           : undefined,
+        conviction: convictionFor('f5', tail.prob),
       });
       break; // only one F5 over pick per game (highest-confidence line)
-    } else if (1 - tail.prob >= threshold) {
+    } else if (1 - tail.prob >= f5Bar) {
       // The UNDER side. P(under X.5) = 1 - P(over X.5) for the same line.
       const result: OpportunityResult =
         isFinal && g.actual ? (g.actual.f5Runs < tail.line ? 'hit' : 'miss') :
@@ -335,6 +376,7 @@ export function picksForGame(
         actualText: g.actual
           ? `${g.actual.f5Complete ? 'F5 final' : 'Live'} ${g.actual.f5Runs} R · under ${tail.line.toFixed(1)} ${g.actual.f5Runs < tail.line ? '✓' : g.actual.f5Complete ? '✗' : '(in progress)'}`
           : undefined,
+        conviction: convictionFor('f5', 1 - tail.prob),
       });
       break;
     }
@@ -342,7 +384,8 @@ export function picksForGame(
 
   // ── 4. NRFI / YRFI ───────────────────────────────────────────────────────
   const pNrfi = f5.pNRFI;
-  if (pNrfi >= threshold) {
+  const nrfiBar = opts.threshold ?? thresholdFor('nrfi-yrfi', mode);
+  if (pNrfi >= nrfiBar) {
     const result: OpportunityResult =
       isFinal && g.actual ? (g.actual.firstInningRuns === 0 ? 'hit' : 'miss') :
       isLive && g.actual?.firstInningComplete ? (g.actual.firstInningRuns === 0 ? 'hit' : 'miss') :
@@ -364,8 +407,9 @@ export function picksForGame(
         : g.actual
         ? `Live · 1st inning in progress`
         : undefined,
+      conviction: convictionFor('nrfi-yrfi', pNrfi),
     });
-  } else if (1 - pNrfi >= threshold) {
+  } else if (1 - pNrfi >= nrfiBar) {
     const pYrfi = 1 - pNrfi;
     const result: OpportunityResult =
       isFinal && g.actual ? (g.actual.firstInningRuns > 0 ? 'hit' : 'miss') :
@@ -388,6 +432,7 @@ export function picksForGame(
         : g.actual
         ? `Live · 1st inning in progress`
         : undefined,
+      conviction: convictionFor('nrfi-yrfi', pYrfi),
     });
   }
 
@@ -403,9 +448,9 @@ export function picksForGame(
     const overOdds = odds.totals.overPrice;
     const underOdds = odds.totals.underPrice;
     let bestSide: 'over' | 'under' | null = null;
-    if (passes(pOver, overOdds) && (!passes(pUnder, underOdds) || edgePP(pOver, overOdds) >= edgePP(pUnder, underOdds))) {
+    if (passes('total-runs', pOver, overOdds) && (!passes('total-runs', pUnder, underOdds) || edgePP(pOver, overOdds) >= edgePP(pUnder, underOdds))) {
       bestSide = 'over';
-    } else if (passes(pUnder, underOdds)) {
+    } else if (passes('total-runs', pUnder, underOdds)) {
       bestSide = 'under';
     }
     if (bestSide) {
@@ -435,6 +480,7 @@ export function picksForGame(
             : `Live ${g.actual.total} R through ${g.actual.inningsCompleted} inn`
           : undefined,
         market: attachMarket(bestProbRT, bestPrice, odds.bookCount),
+        conviction: convictionFor('total-runs', bestProbRT),
       });
     }
   } else {
@@ -442,11 +488,12 @@ export function picksForGame(
     let bestLineRT = -1;
     let bestProbRT = 0;
     let bestSideRT: 'over' | 'under' = 'over';
+    const totalsBar = opts.threshold ?? thresholdFor('total-runs', mode);
     for (const line of [6.5, 7.5, 8.5, 9.5, 10.5, 11.5]) {
       const pOver = pTotalOver(mean, line);
-      if (pOver >= threshold && pOver > bestProbRT) {
+      if (pOver >= totalsBar && pOver > bestProbRT) {
         bestProbRT = pOver; bestLineRT = line; bestSideRT = 'over';
-      } else if (1 - pOver >= threshold && 1 - pOver > bestProbRT) {
+      } else if (1 - pOver >= totalsBar && 1 - pOver > bestProbRT) {
         bestProbRT = 1 - pOver; bestLineRT = line; bestSideRT = 'under';
       }
     }
@@ -474,6 +521,7 @@ export function picksForGame(
             ? `Final ${g.actual.total} R · ${bestSideRT} ${bestLineRT.toFixed(1)} ${result === 'hit' ? '✓' : '✗'}`
             : `Live ${g.actual.total} R through ${g.actual.inningsCompleted} inn`
           : undefined,
+        conviction: convictionFor('total-runs', bestProbRT),
       });
     }
   }
@@ -492,8 +540,8 @@ export function picksForGame(
   const rlAwayPoint = odds?.runLine?.awayPoint ?? +1.5;
 
   let rlSide: 'home' | 'away' | null = null;
-  if (passes(pHomeCovers, rlHomeOdds)) rlSide = 'home';
-  else if (passes(pAwayCovers, rlAwayOdds)) rlSide = 'away';
+  if (passes('run-line', pHomeCovers, rlHomeOdds)) rlSide = 'home';
+  else if (passes('run-line', pAwayCovers, rlAwayOdds)) rlSide = 'away';
 
   if (rlSide) {
     const isHome = rlSide === 'home';
@@ -526,6 +574,7 @@ export function picksForGame(
         ? `Final ${g.actual.awayRuns}–${g.actual.homeRuns} · margin ${g.actual.homeRuns - g.actual.awayRuns} · ${result === 'hit' ? '✓' : '✗'}`
         : g.actual ? `Live ${g.actual.awayRuns}–${g.actual.homeRuns}` : undefined,
       market: attachMarket(prob, price, odds?.bookCount),
+      conviction: convictionFor('run-line', prob),
     });
   }
 
@@ -627,6 +676,33 @@ export function formatAmericanOdds(odds: number): string {
 export function fairUnitPayout(p: number): number {
   if (p <= 0 || p >= 1) return 0;
   return (1 - p) / p;
+}
+
+/**
+ * "Locks of the Day" — the highest-conviction picks across all categories,
+ * with at most one pick per game so we don't stack 3 picks on the same matchup
+ * (which would make the day's P&L correlated and concentrated).
+ *
+ * Conviction is already normalized per category (modelP − categoryThreshold),
+ * so a 0.05 conviction NRFI ranks equivalently to a 0.05 conviction K-prop —
+ * both are 5pp above their respective bars.
+ */
+export function topLocks(picks: ConvictionPick[], n = 5): ConvictionPick[] {
+  // Take only un-decided & non-final picks for the "today" tier (live + pending).
+  // Decided picks (hit/miss) are receipts, not actionable locks.
+  const actionable = picks.filter((p) => p.result === 'pending' || p.result === 'live');
+  // Sort by conviction descending
+  const sorted = [...actionable].sort((a, b) => b.conviction - a.conviction);
+  // One pick per game — keep only the top-conviction pick from each gamePk
+  const seen = new Set<number>();
+  const out: ConvictionPick[] = [];
+  for (const pick of sorted) {
+    if (seen.has(pick.gamePk)) continue;
+    seen.add(pick.gamePk);
+    out.push(pick);
+    if (out.length >= n) break;
+  }
+  return out;
 }
 
 export function aggregatePicks(picks: ConvictionPick[]) {

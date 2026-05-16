@@ -3,10 +3,12 @@ import { buildSlateInsights } from '@/lib/insights';
 import {
   buildAllPicks,
   aggregatePicks,
+  topLocks,
   fairAmericanOdds,
   formatAmericanOdds,
   fairUnitPayout,
   payoutAtOdds,
+  CATEGORY_THRESHOLDS,
   type ConvictionPick,
   type PickCategory,
 } from '@/lib/highConvictionPicks';
@@ -74,10 +76,10 @@ export default async function ResultsPage({ searchParams }: { searchParams: { da
           return {
             date: d,
             picks: buildAllPicks(s.games, {
-              threshold: 0.60,
               edgeThresholdPP: 3.0,
               marketOdds: odds,
               mode: odds ? 'edge' : 'prob',
+              // No global threshold — let CATEGORY_THRESHOLDS apply per category
             }),
             games: s.games.length,
           };
@@ -127,6 +129,10 @@ export default async function ResultsPage({ searchParams }: { searchParams: { da
     });
   }
 
+  // Locks of the Day — top 5 highest-conviction picks (one per game) across
+  // categories. Only shows live + pending picks; decided picks are receipts.
+  const locks = todaySlate.date === today ? topLocks(todaySlate.picks, 5) : [];
+
   return (
     <div className="max-w-[1300px] mx-auto px-4 py-6 space-y-6">
       {/* Header */}
@@ -139,7 +145,7 @@ export default async function ResultsPage({ searchParams }: { searchParams: { da
           <p className="text-sm text-ink-muted mt-1 flex items-center gap-2 flex-wrap">
             <LocalDate ymd={today} className="stat-num" />
             <span className="px-1 text-ink-faint">·</span>
-            <span>{todaySlate.picks.length} picks at &gt; 60% model probability</span>
+            <span>{todaySlate.picks.length} picks at per-category model bars</span>
             <span className="px-1 text-ink-faint">·</span>
             <AutoRefresh intervalMs={60_000} label="auto-refresh 60s" />
           </p>
@@ -154,19 +160,17 @@ export default async function ResultsPage({ searchParams }: { searchParams: { da
         >
           <div className="text-sm text-ink-muted space-y-2">
             <p>
-              No live sportsbook odds are wired in yet. Picks are filtered by{' '}
-              <span className="text-ink">model probability ≥ 60%</span>, and units are calculated at
-              fair zero-vig odds derived from the model itself. <span className="text-signal-warn">This
-              can't actually find market edge.</span>
+              Running in <span className="text-ink">model-only mode</span> — no sportsbook odds wired in.
+              Picks are filtered by <span className="text-ink">per-category probability bars</span> tuned
+              to each market's natural baseline (ML 64% · run-line 58% · Ks 58% · F5 60% · NRFI 62% ·
+              totals 60%), and ranked into <span className="text-ink">Locks of the Day</span> by how far
+              each modelP exceeds its bar.
             </p>
             <p>
-              <span className="text-ink">To enable edge mode:</span> create a free API key at{' '}
-              <a className="underline" href="https://the-odds-api.com" target="_blank" rel="noreferrer">the-odds-api.com</a>{' '}
-              (500 requests/month free — more than enough for daily MLB), then set the{' '}
-              <code className="text-2xs bg-bg-sunken px-1 rounded">ODDS_API_KEY</code> env var in your Vercel project
-              and redeploy. Picks will then surface only when model probability beats market-implied
-              probability by ≥ 3 percentage points, and units are calculated at the actual market price you'd
-              get from a sportsbook.
+              Units are calculated at fair zero-vig odds derived from the model — what you'd earn at
+              the model's own price. Real sportsbook lines are ~5% worse, so live P&amp;L will track
+              slightly below these numbers. (Optional: set <code className="text-2xs bg-bg-sunken px-1 rounded">ODDS_API_KEY</code>{' '}
+              env var to enable edge mode against real market lines.)
             </p>
           </div>
         </Panel>
@@ -243,6 +247,29 @@ export default async function ResultsPage({ searchParams }: { searchParams: { da
         </div>
       </Panel>
 
+      {/* LOCKS OF THE DAY */}
+      {locks.length > 0 && (
+        <Panel
+          title={
+            <span className="flex items-center gap-2">
+              <Crown size={16} className="text-accent" />
+              Locks of the Day
+              <span className="text-2xs px-1.5 py-0.5 rounded border border-accent/30 bg-accent/10 text-accent stat-num font-bold">
+                TOP {locks.length}
+              </span>
+            </span>
+          }
+          subtitle="Highest-conviction picks across all categories — at most one per game"
+          flush
+        >
+          <ul className="divide-y divide-line-subtle">
+            {locks.map((p, i) => (
+              <LockRow key={`lock-${p.gamePk}-${p.category}`} pick={p} rank={i + 1} />
+            ))}
+          </ul>
+        </Panel>
+      )}
+
       {/* 7-DAY HISTORY */}
       <Panel
         title="Last 7 days"
@@ -287,8 +314,8 @@ export default async function ResultsPage({ searchParams }: { searchParams: { da
       {todaySlate.picks.length === 0 ? (
         <Panel>
           <Empty
-            title="No > 60% picks on today's slate"
-            description="The model didn't find any single-side probability above 60% in any of the five buckets for the games on this date."
+            title="No qualifying picks on today's slate"
+            description="The model didn't find any side meeting the per-category conviction bars (ML 64%, run-line 58%, Ks 58%, F5 60%, NRFI 62%, totals 60%) for the games on this date."
             icon={<Activity size={28} />}
           />
         </Panel>
@@ -338,8 +365,18 @@ export default async function ResultsPage({ searchParams }: { searchParams: { da
             is set) accepts a side only when the model probability beats the market's implied probability by{' '}
             <span className="stat-num">≥ 3 percentage points</span> AND model prob ≥ 50% — this is how sharp
             bettors actually operate, since a 65% pick at −300 is a losing bet but a 52% pick at +120 is +EV.
-            <span className="text-ink"> Prob mode</span> (model-only fallback) accepts any side at{' '}
-            <span className="stat-num">≥ 60%</span> raw model probability.
+            <span className="text-ink"> Prob mode</span> (model-only fallback) accepts a side at the
+            category's natural bar — different categories have different "easy" baselines, so a single
+            60% threshold treats a coin-flip win as equal to a hard NRFI prediction. Per-category
+            bars: <span className="stat-num">ML 64%</span> · <span className="stat-num">run-line 58%</span> ·{' '}
+            <span className="stat-num">Ks 58%</span> · <span className="stat-num">F5 60%</span> ·{' '}
+            <span className="stat-num">NRFI 62%</span> · <span className="stat-num">totals 60%</span>.
+          </li>
+          <li>
+            <span className="text-ink">Locks of the Day</span> surfaces the top 5 highest-conviction
+            picks of the slate, ranked by how far each modelP exceeds its category bar (so a 65% pick
+            in a 58%-bar category beats a 67% pick in a 64%-bar category). At most one pick per game,
+            so the day's P&amp;L isn't concentrated on a single matchup.
           </li>
           <li>
             <span className="text-ink">Win % = hits / (hits + misses).</span> Pushes, pending, and live picks
@@ -361,6 +398,91 @@ export default async function ResultsPage({ searchParams }: { searchParams: { da
         </ul>
       </Panel>
     </div>
+  );
+}
+
+function LockRow({ pick, rank }: { pick: ConvictionPick; rank: number }) {
+  const meta = CATEGORY_META[pick.category];
+  const Icon = meta.icon;
+  const bar = CATEGORY_THRESHOLDS[pick.category];
+  const convictionPP = pick.conviction * 100;
+  const isLive = pick.result === 'live';
+
+  // Rank badge color: gold #1, silver #2, bronze #3, line for rest
+  const rankCls =
+    rank === 1 ? 'bg-accent text-bg border-accent' :
+    rank === 2 ? 'bg-ink-muted text-bg border-ink-muted' :
+    rank === 3 ? 'bg-signal-warn/80 text-bg border-signal-warn' :
+    'bg-bg-raised text-ink-muted border-line';
+
+  return (
+    <li className={`border-l-2 ${rank === 1 ? 'border-l-accent' : 'border-l-transparent'}`}>
+      <Link href={`/game/${pick.gamePk}`} className="block px-4 py-3 hover:bg-bg-hover/40 transition-colors">
+        <div className="grid grid-cols-[28px_auto_1fr_auto] gap-3 items-center">
+          {/* Rank badge */}
+          <div className={`w-7 h-7 rounded-full border flex items-center justify-center text-sm font-black stat-num ${rankCls}`}>
+            {rank}
+          </div>
+
+          {/* Side + game */}
+          <div className="flex flex-col items-start gap-0.5 min-w-[110px]">
+            <span className="text-base font-black text-ink stat-num leading-none">{pick.side}</span>
+            <div className="flex items-center gap-1">
+              <Icon size={10} className={meta.color} />
+              <span className="text-2xs text-ink-faint stat-num">{pick.gameLabel}</span>
+            </div>
+          </div>
+
+          {/* Body */}
+          <div className="min-w-0">
+            <div className="text-sm text-ink leading-snug">
+              {pick.playerName && <span className="font-semibold mr-1">{pick.playerName}</span>}
+              <span className="text-ink-muted">{pick.prediction.replace(`${pick.playerName} `, '')}</span>
+            </div>
+            <div className="text-2xs text-ink-faint mt-0.5">
+              <span className="label-micro mr-1">{meta.label} bar</span>
+              <span className="stat-num">{(bar * 100).toFixed(0)}%</span>
+              <span className="text-ink-faint mx-1">·</span>
+              <span className="stat-num text-signal-pos font-semibold">+{convictionPP.toFixed(1)}pp over bar</span>
+              {isLive && (
+                <>
+                  <span className="text-ink-faint mx-1">·</span>
+                  <span className="text-signal-neg font-semibold">LIVE NOW</span>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Probability + price */}
+          <div className="text-right shrink-0 flex flex-col items-end gap-0.5 min-w-[110px]">
+            <div className="flex items-baseline gap-1">
+              <span className={`stat-num text-2xl font-black ${
+                pick.probability >= 0.75 ? 'text-signal-pos' :
+                pick.probability >= 0.65 ? 'text-ink' :
+                'text-ink'
+              }`}>{(pick.probability * 100).toFixed(0)}</span>
+              <span className="text-2xs text-ink-faint">% model</span>
+            </div>
+            {pick.market ? (
+              <div className={`text-2xs stat-num font-semibold ${
+                pick.market.edgePP >= 5 ? 'text-signal-pos' :
+                pick.market.edgePP >= 3 ? 'text-signal-pos/80' :
+                'text-ink-muted'
+              }`}>
+                {formatAmericanOdds(pick.market.americanOdds)} · +{pick.market.edgePP.toFixed(1)}pp edge
+              </div>
+            ) : (
+              <div className="text-2xs text-ink-faint stat-num">
+                fair {formatAmericanOdds(fairAmericanOdds(pick.probability))}
+              </div>
+            )}
+            <span className="text-2xs text-ink-faint">
+              <LocalTime iso={pick.firstPitch} format="time" />
+            </span>
+          </div>
+        </div>
+      </Link>
+    </li>
   );
 }
 
