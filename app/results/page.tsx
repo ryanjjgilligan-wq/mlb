@@ -1,6 +1,14 @@
 import Link from 'next/link';
 import { buildSlateInsights } from '@/lib/insights';
-import { buildAllPicks, aggregatePicks, type ConvictionPick, type PickCategory } from '@/lib/highConvictionPicks';
+import {
+  buildAllPicks,
+  aggregatePicks,
+  fairAmericanOdds,
+  formatAmericanOdds,
+  fairUnitPayout,
+  type ConvictionPick,
+  type PickCategory,
+} from '@/lib/highConvictionPicks';
 import { Panel } from '@/components/ui/Panel';
 import { Empty } from '@/components/ui/Empty';
 import { AutoRefresh } from '@/components/AutoRefresh';
@@ -133,7 +141,7 @@ export default async function ResultsPage({ searchParams }: { searchParams: { da
             label="Units"
             value={todayAgg.units >= 0 ? `+${todayAgg.units.toFixed(1)}` : todayAgg.units.toFixed(1)}
             accent={todayAgg.units > 0 ? 'pos' : todayAgg.units < 0 ? 'neg' : undefined}
-            sub="−110 juice assumed"
+            sub="at fair model odds"
           />
           <BigTile
             label="Open"
@@ -265,7 +273,15 @@ export default async function ResultsPage({ searchParams }: { searchParams: { da
           </li>
           <li>
             <span className="text-ink">Win % = hits / (hits + misses).</span> Pushes, pending, and live picks
-            are tracked separately. Units assume −110 juice (+1.00 per win, −1.10 per loss).
+            are tracked separately.
+          </li>
+          <li>
+            <span className="text-ink">Units are calculated at fair (zero-vig) American odds derived from
+            each pick's model probability</span> — not a flat −110. A 70% pick wins (1−0.70)/0.70 = 0.43u;
+            a 60% pick wins 0.67u; both lose 1.00u. This is what you'd earn if you got the model's own price
+            on every pick. Real sportsbook lines are ~5% worse than fair due to vig, so live P&amp;L will
+            track slightly below the numbers shown here. Each pick row displays its fair American odds
+            inline (e.g. <span className="stat-num">fair −233</span> for a 70% pick).
           </li>
           <li>
             <span className="text-ink">K props use Poisson(λ)</span> where λ = projected starter Ks (K/9 ×
@@ -344,8 +360,8 @@ function PickRow({ pick }: { pick: ConvictionPick }) {
             )}
           </div>
 
-          {/* Probability column */}
-          <div className="text-right shrink-0 flex flex-col items-end gap-0.5">
+          {/* Probability + fair odds column */}
+          <div className="text-right shrink-0 flex flex-col items-end gap-0.5 min-w-[80px]">
             <div className="flex items-baseline gap-1">
               <span className={`stat-num text-2xl font-black ${
                 pick.probability >= 0.75 ? 'text-signal-pos' :
@@ -354,6 +370,17 @@ function PickRow({ pick }: { pick: ConvictionPick }) {
               }`}>{(pick.probability * 100).toFixed(0)}</span>
               <span className="text-2xs text-ink-faint">%</span>
             </div>
+            <div className="text-2xs text-ink-faint stat-num">
+              fair {formatAmericanOdds(fairAmericanOdds(pick.probability))}
+            </div>
+            {pick.result === 'hit' && (
+              <div className="text-2xs text-signal-pos stat-num">
+                +{fairUnitPayout(pick.probability).toFixed(2)}u
+              </div>
+            )}
+            {pick.result === 'miss' && (
+              <div className="text-2xs text-signal-neg stat-num">−1.00u</div>
+            )}
             {(pick.result === 'live' || pick.result === 'pending') && (
               <span className="text-2xs text-ink-faint">
                 <LocalTime iso={pick.firstPitch} format="time" />

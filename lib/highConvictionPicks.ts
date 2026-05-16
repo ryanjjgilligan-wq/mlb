@@ -378,6 +378,35 @@ export function buildAllPicks(insights: GameInsight[], threshold = 0.60): Convic
   return all;
 }
 
+/**
+ * Convert a probability (0–1) to fair American odds.
+ *   p ≥ 0.5  → negative odds (favorite): odds = −100·p/(1−p)
+ *   p < 0.5  → positive odds (underdog):  odds = +100·(1−p)/p
+ * These are zero-vig (fair) odds; real sportsbook lines will be ~5% worse.
+ */
+export function fairAmericanOdds(p: number): number {
+  if (p <= 0 || p >= 1) return p >= 1 ? -10000 : 10000;
+  if (p >= 0.5) return -Math.round((100 * p) / (1 - p));
+  return Math.round((100 * (1 - p)) / p);
+}
+
+/**
+ * Format American odds for display (e.g., -233 / +150).
+ */
+export function formatAmericanOdds(odds: number): string {
+  if (odds >= 0) return `+${odds}`;
+  return `${odds}`;
+}
+
+/**
+ * Net unit payout per $1 risked on a winning pick at the given probability,
+ * assuming fair (zero-vig) odds. p=0.70 → 0.43, p=0.60 → 0.67, p=0.50 → 1.00.
+ */
+export function fairUnitPayout(p: number): number {
+  if (p <= 0 || p >= 1) return 0;
+  return (1 - p) / p;
+}
+
 export function aggregatePicks(picks: ConvictionPick[]) {
   const hits = picks.filter((p) => p.result === 'hit').length;
   const misses = picks.filter((p) => p.result === 'miss').length;
@@ -386,6 +415,16 @@ export function aggregatePicks(picks: ConvictionPick[]) {
   const live = picks.filter((p) => p.result === 'live').length;
   const noGrade = picks.filter((p) => p.result === 'no-grade').length;
   const decided = hits + misses;
+
+  // Units calculated at FAIR (model-derived) American odds — each pick's
+  // payout is sized to its probability, not a flat −110. Wins pay
+  // (1−p)/p units, losses cost 1.0u.
+  let units = 0;
+  for (const p of picks) {
+    if (p.result === 'hit') units += fairUnitPayout(p.probability);
+    else if (p.result === 'miss') units -= 1.0;
+  }
+
   return {
     total: picks.length,
     hits,
@@ -395,6 +434,6 @@ export function aggregatePicks(picks: ConvictionPick[]) {
     live,
     noGrade,
     hitRate: decided > 0 ? hits / decided : 0,
-    units: hits * 1 - misses * 1.1,
+    units,
   };
 }
